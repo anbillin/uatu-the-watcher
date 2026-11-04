@@ -15,6 +15,7 @@ import collections
 import datetime as dt
 import fcntl
 import json
+import random
 import re
 import subprocess
 import sys
@@ -29,7 +30,11 @@ WORK_DIR = STATE_DIR / "work"
 DRAFTS_DIR = STATE_DIR / "drafts"
 LOGS_DIR = ROOT / "logs"
 STATE_FILE = STATE_DIR / "reviewed.json"
+PRAISE_FILE = STATE_DIR / "praise.json"
 PROMPT_FILE = ROOT / "prompts" / "review-pr.md"
+AGREEMENTS_FILE = ROOT / "prompts" / "code-agreements.json"
+# Ids de los Code Agreements, para que el esquema de salida sólo admita los que existen.
+AGREEMENT_IDS = [a["id"] for a in json.loads(AGREEMENTS_FILE.read_text())["agreements"]]
 
 MARKER_RE = re.compile(r"<!-- uatu sha=([0-9a-f]{7,40}) -->")
 ORG = CONFIG["github_org"]
@@ -44,6 +49,7 @@ FINDINGS_SCHEMA = {
     "type": "object",
     "properties": {
         "summary": {"type": "string"},
+        "praise": {"type": "string"},
         "findings": {
             "type": "array",
             "items": {
@@ -54,13 +60,14 @@ FINDINGS_SCHEMA = {
                     "line": {"type": "integer"},
                     "severity": {"type": "string", "enum": ["must", "should", "nit"]},
                     "rule": {"type": "string"},
+                    "agreement": {"type": "string", "enum": [""] + AGREEMENT_IDS},
                     "body": {"type": "string"},
                 },
-                "required": ["path", "start_line", "line", "severity", "rule", "body"],
+                "required": ["path", "start_line", "line", "severity", "rule", "agreement", "body"],
             },
         },
     },
-    "required": ["summary", "findings"],
+    "required": ["summary", "praise", "findings"],
 }
 
 
@@ -137,6 +144,38 @@ def save_draft(draft: dict) -> None:
         json.dumps(draft, indent=2, ensure_ascii=False))
 
 
+def load_praise_log() -> dict:
+    with STATE_LOCK:
+        return json.loads(PRAISE_FILE.read_text()) if PRAISE_FILE.exists() else {}
+
+
+def record_praise(author: str) -> None:
+    with STATE_LOCK:
+        logd = load_praise_log()
+        logd[author] = now()
+        STATE_DIR.mkdir(exist_ok=True)
+        PRAISE_FILE.write_text(json.dumps(logd, indent=2, ensure_ascii=False, sort_keys=True))
+
+
+def praise_gate(author: str) -> str:
+    """Decide si el elogio propuesto entra por defecto. Devuelve 'ok', 'cooldown' o 'rate'.
+    El usuario siempre puede marcarlo a mano en el borrador."""
+    cfg = CONFIG.get("praise") or {}
+    last = load_praise_log().get(author)
+    if last:
+        days = (dt.datetime.now() - dt.datetime.strptime(last, "%Y-%m-%d %H:%M:%S")).days
+        if days < cfg.get("cooldown_days", 5):
+            return "cooldown"
+    if random.random() > cfg.get("rate", 0.35):
+        return "rate"
+    return "ok"
+
+
+def praise_text(draft: dict) -> str:
+    pr = draft.get("praise") or {}
+    return (pr.get("body") or "").strip() if pr.get("enabled") else ""
+
+
 def enabled_comments(draft: dict) -> list:
     return [c for c in draft["comments"] if c.get("enabled", True) and c["body"].strip()]
 
@@ -152,6 +191,7 @@ def draft_summary(draft: dict, head: str) -> dict:
         "mode": draft["mode"],
         "stale": draft["head"] != head,
         "cost_usd": draft.get("claude", {}).get("cost_usd"),
+        "praise": bool(praise_text(draft)),
     }
 
 
@@ -301,6 +341,50 @@ def code_context(repo_path: Path, path: str, start: int, end: int, around: int =
     return [{"n": n, "text": lines[n - 1], "hit": start <= n <= end} for n in range(a, b + 1)]
 
 
+# ----------------------------------------------------------------- code agreements
+
+def load_agreements() -> dict:
+    """Acuerdos del equipo (prompts/code-agreements.json), por id."""
+    data = json.loads(AGREEMENTS_FILE.read_text())
+    return {a["id"]: a for a in data["agreements"]}
+
+
+def agreements_for(repo: str) -> list:
+    """Los acuerdos que aplican a un repo: los generales más los de su ámbito (front/back)."""
+    scope = (CONFIG.get("code_agreements") or {}).get("scope", {}).get(repo)
+    return [a for a in load_agreements().values() if a["scope"] in (None, scope)]
+
+
+def agreement_url(agreement: dict) -> str:
+    base = (CONFIG.get("code_agreements") or {}).get("url", "")
+    return f"{base}#{agreement['anchor']}" if agreement.get("anchor") else base
+
+
+def render_agreements(repo: str) -> str:
+    """Sección del prompt con los acuerdos aplicables al repo, con su id para citarlos."""
+    lines = []
+    for a in agreements_for(repo):
+        lines.append(f"- `{a['id']}` · **{a['title']}**: {a['rule']}")
+    return "\n".join(lines)
+
+
+def attach_agreement(finding: dict) -> dict:
+    """Si el hallazgo cita un acuerdo, deja el enlace a Notion al final del comentario
+    (como hace el equipo) y la atribución en `rule`. El enlace lo pone UATU, no claude:
+    así el anclaje es siempre el bueno."""
+    aid = (finding.get("agreement") or "").strip()
+    agreement = load_agreements().get(aid) if aid else None
+    if aid and not agreement:
+        log(f"  acuerdo desconocido '{aid}' en {finding['path']}:{finding['line']}, se publica sin enlace")
+    if not agreement:
+        return finding
+    base = (CONFIG.get("code_agreements") or {}).get("url", "")
+    body = finding["body"].rstrip()
+    if base and base not in body:
+        body = f"{body}\n{agreement_url(agreement)}"
+    return {**finding, "body": body, "rule": f"Code Agreements › {agreement['title']}"}
+
+
 # ----------------------------------------------------------------- claude
 
 def render_prompt(pr: dict, head: str, diff_file: Path, delta_file: Path, mode: str, last_sha):
@@ -316,6 +400,8 @@ def render_prompt(pr: dict, head: str, diff_file: Path, delta_file: Path, mode: 
         "{{BASE_REF}}": pr["baseRefName"], "{{HEAD_SHA}}": head, "{{PR_BODY}}": body,
         "{{DIFF_FILE}}": str(diff_file), "{{DELTA_FILE}}": str(delta_file),
         "{{MODE_EXPLANATION}}": mode_expl, "{{MAX_FINDINGS}}": str(CONFIG["max_findings"]),
+        "{{CODE_AGREEMENTS}}": render_agreements(pr["repo"]),
+        "{{CODE_AGREEMENTS_URL}}": (CONFIG.get("code_agreements") or {}).get("url", ""),
     }
     text = PROMPT_FILE.read_text()
     for k, v in repl.items():
@@ -399,7 +485,7 @@ def build_payload(draft: dict) -> dict:
             item["start_line"] = c["start_line"]
             item["start_side"] = "RIGHT"
         comments.append(item)
-    body = (draft.get("summary") or "").strip()
+    body = "\n\n".join(t for t in [praise_text(draft), (draft.get("summary") or "").strip()] if t)
     if CONFIG.get("visible_signature"):
         scope = ("PR completa" if draft["mode"] == "full"
                  else f"commits `{draft['last_sha'][:10]}..{draft['head'][:10]}`")
@@ -413,6 +499,10 @@ def print_draft(draft: dict) -> None:
     """Enseña un borrador por consola, con el código señalado."""
     sep = "=" * 72
     print(f"\n{sep}\n{draft['repo']}#{draft['number']} · {draft['title']}\n{draft['url']}\n{sep}")
+    if praise_text(draft):
+        print(f"\nELOGIO\n{praise_text(draft)}")
+    elif (draft.get("praise") or {}).get("body"):
+        print(f"\n(elogio propuesto, no incluido por {draft['praise']['gate']}: {draft['praise']['body']})")
     if draft.get("summary"):
         print(f"\nRESUMEN\n{draft['summary']}")
     for c in enabled_comments(draft):
@@ -476,9 +566,11 @@ def make_draft(pr: dict, force_full: bool = False) -> dict:
         # Los comentarios sólo pueden caer en líneas del diff de la PR; en delta,
         # además, sólo en las del delta.
         findings = validate_findings(result.get("findings", []), commentable_lines(delta_diff))
+        findings = [attach_agreement(f) for f in findings]
         comments = [{
             "path": f["path"], "start_line": f["start_line"], "line": f["line"],
             "severity": f["severity"], "rule": f["rule"], "body": f["body"].strip(),
+            "agreement": (f.get("agreement") or "") or None,
             "enabled": True,
             "context": code_context(repo_path, f["path"], f["start_line"], f["line"]),
         } for f in findings]
@@ -489,8 +581,14 @@ def make_draft(pr: dict, force_full: bool = False) -> dict:
         "mode": mode, "last_sha": last_sha, "lines_changed": changed,
         "created_at": now(), "status": "pending",
         "summary": (result.get("summary") or "").strip(),
+        "praise": None,
         "comments": comments, "claude": meta,
     }
+    praise = (result.get("praise") or "").strip()
+    if praise:
+        gate = praise_gate(pr["author"]["login"])
+        draft["praise"] = {"body": praise, "enabled": gate == "ok", "gate": gate}
+        log(f"{key}: elogio propuesto ({'incluido' if gate == 'ok' else 'apartado por ' + gate})")
     save_draft(draft)
     log(f"{key}: borrador listo con {len(comments)} comentarios (sin publicar)")
     return draft
@@ -501,7 +599,7 @@ def publish_draft(draft: dict) -> dict:
     if draft["status"] != "pending":
         raise ValueError(f"el borrador ya está {draft['status']}")
     payload = build_payload(draft)
-    if not payload["comments"] and not (draft.get("summary") or "").strip():
+    if not payload["comments"] and not praise_text(draft) and not (draft.get("summary") or "").strip():
         raise ValueError("no hay nada que publicar: descarta el borrador o deja algún comentario")
     key = state_key(draft["repo"], draft["number"])
     WORK_DIR.mkdir(parents=True, exist_ok=True)
@@ -511,9 +609,11 @@ def publish_draft(draft: dict) -> dict:
     n = len(payload["comments"])
     update_state(key, {"sha": draft["head"], "at": now(), "status": "reviewed",
                        "findings": n, "mode": draft["mode"]})
+    if praise_text(draft):
+        record_praise(draft["author"])
     draft.update({"status": "published", "published_at": now(), "published_comments": n})
     save_draft(draft)
-    log(f"{key}: publicados {n} comentarios en {draft['url']}")
+    log(f"{key}: publicados {n} comentarios{' + elogio' if praise_text(draft) else ''} en {draft['url']}")
     return draft
 
 

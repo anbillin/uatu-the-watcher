@@ -235,6 +235,9 @@ class Handler(BaseHTTPRequestHandler):
         body = self.read_body()
         if "summary" in body:
             draft["summary"] = str(body["summary"]).strip()
+        if "praise" in body and draft.get("praise"):
+            draft["praise"]["body"] = str(body["praise"].get("body", draft["praise"]["body"]))
+            draft["praise"]["enabled"] = bool(body["praise"].get("enabled", draft["praise"]["enabled"]))
         edits = body.get("comments") or []
         if len(edits) != len(draft["comments"]):
             raise ApiError(409, "el borrador cambió; recarga la página")

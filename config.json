@@ -17,5 +17,16 @@
     "model": "claude-fable-5-1",
     "max_turns": 80,
     "max_budget_usd": 4.0
+  },
+  "praise": {
+    "rate": 0.35,
+    "cooldown_days": 5
+  },
+  "code_agreements": {
+    "url": "https://app.notion.com/p/billin/Code-Agreements-77d078b556454a8fb2e174e2581e820d",
+    "scope": {
+      "gofre": "front",
+      "tortilla": "back"
+    }
   }
 }

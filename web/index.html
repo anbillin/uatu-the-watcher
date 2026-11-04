@@ -336,7 +336,9 @@ function collectEdits() {
     body: card.querySelector('textarea').value,
     enabled: card.querySelector('input[type=checkbox]').checked,
   }));
-  return { summary: document.getElementById('summary').value, comments };
+  const pe = document.getElementById('praise-body');
+  const praise = pe ? { body: pe.value, enabled: document.getElementById('praise-on').checked } : undefined;
+  return { summary: document.getElementById('summary').value, comments, praise };
 }
 async function saveDraft(silent) {
   const d = S.draft;
@@ -348,8 +350,9 @@ async function publish() {
   try {
     await saveDraft(true);
     const n = S.draft.comments.filter(c => c.enabled && c.body.trim()).length;
+    const praised = S.draft.praise && S.draft.praise.enabled && S.draft.praise.body.trim();
     const stale = d.stale ? '\n\nOJO: la PR tiene commits nuevos; los comentarios se anclan al commit revisado.' : '';
-    if (!confirm(`Publicar ${n} comentario(s) en ${d.repo}#${d.number} como ${S.config.me}?${stale}`)) return;
+    if (!confirm(`Publicar ${n} comentario(s)${praised ? ' y un elogio' : ''} en ${d.repo}#${d.number} como ${S.config.me}?${stale}`)) return;
     S.draft = await api('POST', `/api/drafts/${d.repo}/${d.number}/publish`, {});
     toast(`Publicados ${n} comentarios en ${d.repo}#${d.number}`);
     await refresh(true); backToList();
@@ -368,7 +371,11 @@ function toggleCard(i) { document.querySelector(`.card[data-i="${i}"]`).classLis
 function autosize(t) { t.style.height = 'auto'; t.style.height = (t.scrollHeight + 2) + 'px'; }
 function updateCount() {
   const n = [...document.querySelectorAll('.card[data-i]')].filter(c => c.querySelector('input').checked && c.querySelector('textarea').value.trim()).length;
-  const b = document.getElementById('btn-publish'); if (b) b.textContent = `Publicar ${n} comentario${n === 1 ? '' : 's'}`;
+  const po = document.getElementById('praise-on'), pb = document.getElementById('praise-body');
+  const withPraise = po && po.checked && pb.value.trim();
+  const b = document.getElementById('btn-publish');
+  if (b) b.textContent = n ? `Publicar ${n} comentario${n === 1 ? '' : 's'}${withPraise ? ' + elogio' : ''}` : (withPraise ? 'Publicar sólo el elogio' : 'Publicar');
+  const pc = document.getElementById('praise-card'); if (pc) pc.classList.toggle('off', !(po && po.checked));
 }
 async function toggleLog() { S.showLog = !S.showLog; if (S.showLog) await loadLog(); render(true); }
 
@@ -396,7 +403,7 @@ function statusCell(pr) {
   if (job && job.status === 'queued') out.push('<span class="pill accent">en cola</span>');
   else if (job && job.status === 'running') out.push(`<span class="pill accent busy">revisando desde ${job.started_at.slice(11, 16)}</span>`);
   if (d && d.status === 'pending') {
-    out.push(`<span class="pill warn">borrador: ${d.comments} com.${d.stale ? ' · obsoleto' : ''}</span>`);
+    out.push(`<span class="pill warn">borrador: ${d.comments} com.${d.praise ? ' + elogio' : ''}${d.stale ? ' · obsoleto' : ''}</span>`);
   } else if (pr.status === 'al-dia') {
     const l = pr.last; const what = l.status === 'discarded' ? 'descartada' : l.status === 'reviewed' ? `${l.findings} com.` : l.status;
     out.push(`<span class="pill ok">al día · ${what}</span>`);
@@ -439,7 +446,7 @@ function renderList() {
         <td class="num"><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a></td>
         <td><div class="title">${esc(pr.title)}</div>
             <div class="meta">${esc(pr.author)} · generado ${esc(pr.draft.created_at.slice(5, 16))}${pr.draft.cost_usd != null ? ` · ${pr.draft.cost_usd.toFixed(2)} USD` : ''}</div></td>
-        <td><span class="pill warn">${pr.draft.comments} de ${pr.draft.total} com.${pr.draft.stale ? ' · obsoleto' : ''}</span></td>
+        <td><span class="pill warn">${pr.draft.comments} de ${pr.draft.total} com.${pr.draft.praise ? ' + elogio' : ''}${pr.draft.stale ? ' · obsoleto' : ''}</span></td>
         <td class="actions"><button class="primary" onclick="openDraft('${pr.repo}', ${pr.number})">Ver borrador</button></td>
       </tr>`).join('')}</tbody></table>`
     : `<div class="empty quote" style="margin-top:8px"><em>«Observo todo lo que ocurre aquí, pero no interfiero.»</em>No hay borradores pendientes. Pulsa «Revisar» en una PR para que el Vigilante genere uno.</div>`;
@@ -479,7 +486,20 @@ function renderDraft() {
       <div style="margin-top:12px"><label class="rule">Resumen (cuerpo de la review; normalmente vacío)</label>
         <textarea id="summary" ${ro ? 'readonly' : ''} style="min-height:44px" oninput="autosize(this)">${esc(d.summary)}</textarea></div>
     </div>`;
-  if (!d.comments.length) html += `<div class="empty" style="margin-top:14px">El Vigilante no vio nada que comentar en esta PR. Puedes descartar el borrador para darla por revisada.</div>`;
+  const pr_ = d.praise;
+  if (pr_ && pr_.body) {
+    const why = pr_.gate === 'cooldown' ? 'apartado: ya hubo un elogio a esta persona hace poco' : pr_.gate === 'rate' ? 'apartado por la frecuencia configurada; márcalo si quieres mandarlo' : 'incluido';
+    html += `
+    <div class="card ${pr_.enabled ? '' : 'off'}" id="praise-card">
+      <div class="bar">
+        <span class="path" style="font-family:inherit">Elogio · va al cuerpo de la review</span>
+        <span class="rule">${esc(why)}</span>
+        <label><input type="checkbox" id="praise-on" ${pr_.enabled ? 'checked' : ''} ${ro ? 'disabled' : ''} onchange="updateCount()"> publicar</label>
+      </div>
+      <div class="body"><textarea id="praise-body" ${ro ? 'readonly' : ''} oninput="updateCount(); autosize(this)">${esc(pr_.body)}</textarea></div>
+    </div>`;
+  }
+  if (!d.comments.length) html += `<div class="empty" style="margin-top:14px">Claude no encontró nada que comentar.${pr_ && pr_.body ? ' Puedes publicar sólo el elogio, o' : ' Puedes'} descartar el borrador para dar la PR por revisada.</div>`;
   html += d.comments.map((cm, i) => {
     const rng = cm.start_line < cm.line ? `${cm.start_line}-${cm.line}` : cm.line;
     const code = (cm.context || []).map(r => `<span class="ln ${r.hit ? 'hit' : ''}"><span class="n">${r.n}</span>${esc(r.text)}</span>`).join('') || '<span class="ln">(sin contexto)</span>';

@@ -1,0 +1,329 @@
+{
+  "_comment": "Acuerdos del equipo (Notion › Code Agreements), resumidos para la revisión. `anchor` es el id de bloque de Notion que el equipo ya usa al enlazar la regla en PRs; null si no se ha visto en ningún comentario (el enlace cae en la página sin anclaje). `scope`: null = todos los repos, 'front' o 'back' según config.json → code_agreements.scope.",
+  "agreements": [
+    {
+      "id": "nombres-descriptivos",
+      "scope": null,
+      "title": "Nombres descriptivos",
+      "rule": "El nombre de variables, funciones y ficheros describe fielmente su intención. Nada de `elem1`, `data2`, `aux`, `flag`.",
+      "anchor": null
+    },
+    {
+      "id": "nombre-fichero-coherente",
+      "scope": null,
+      "title": "Nombres coherentes",
+      "rule": "El nombre del fichero coincide con el de la clase, componente, hook o función principal que exporta.",
+      "anchor": null
+    },
+    {
+      "id": "comentarios-en-ingles",
+      "scope": null,
+      "title": "Comentarios en código en inglés",
+      "rule": "Los comentarios dentro del código van siempre en inglés (los de la PR, en español).",
+      "anchor": "3a28f93a11e8424086ef9cbd509d1825"
+    },
+    {
+      "id": "codigo-comentado",
+      "scope": null,
+      "title": "No dejar código comentado",
+      "rule": "No se deja código comentado; si se deja, tiene que ir con una explicación clara de por qué no se borra.",
+      "anchor": null
+    },
+    {
+      "id": "funcion-40-lineas",
+      "scope": null,
+      "title": "Funciones y métodos pequeños",
+      "rule": "Una función o método nunca supera las 40 líneas (líneas en blanco incluidas). La moda debería estar por debajo de 12.",
+      "anchor": "bf795d0216bb4554a4519adf7f3170bb"
+    },
+    {
+      "id": "pocos-parametros",
+      "scope": null,
+      "title": "Pocos parámetros",
+      "rule": "Como mucho 3 parámetros obligatorios; con más, se pasa un objeto con nombre (`options`).",
+      "anchor": "4c0ea598571d49098ff5c921354a98f7"
+    },
+    {
+      "id": "tipo-retorno-explicito",
+      "scope": null,
+      "title": "Tipo de retorno explícito",
+      "rule": "Toda función, método y hook lleva el tipo de retorno escrito en su firma.",
+      "anchor": "e2ca97a5a4f545bcae09d342df3c23ed"
+    },
+    {
+      "id": "funciones-anidadas",
+      "scope": null,
+      "title": "No declarar funciones dentro de otras funciones",
+      "rule": "No se declaran funciones auxiliares dentro de otra función (se reconstruyen en cada llamada); se sacan fuera. Excepción: `useEffect`, callbacks de hooks y los componentes funcionales en general.",
+      "anchor": "8089ddbfe3dd4031b652c639202968cf"
+    },
+    {
+      "id": "async-sin-await",
+      "scope": null,
+      "title": "No `async` sin `await`",
+      "rule": "Si el cuerpo de la función no tiene ningún `await`, la firma no lleva `async`.",
+      "anchor": null
+    },
+    {
+      "id": "map-vs-foreach",
+      "scope": null,
+      "title": "`.map` para transformar, `.forEach` para recorrer",
+      "rule": "`.map` cuando se transforma y se devuelve algo; `.forEach` cuando sólo se recorre. Ni `.forEach` + `push` para construir un array, ni `.map` ignorando el resultado.",
+      "anchor": "cbc57d43be584a3caaf7f235cf357b55"
+    },
+    {
+      "id": "encapsular-condicionales",
+      "scope": null,
+      "title": "Encapsular condicionales",
+      "rule": "La condición de un `if` se saca a una variable o función con nombre. Obligatorio si la condición lleva algún operador lógico (`&&`, `||`); sin operadores lógicos no es obligatorio.",
+      "anchor": "23db1227167545d59f0433a171096fec"
+    },
+    {
+      "id": "triple-igual",
+      "scope": null,
+      "title": "No usar `==`",
+      "rule": "Siempre `===` y `!==`, incluso en `x == null`.",
+      "anchor": "dce4c9f41aa34e9db2dca5cc8d631e6d"
+    },
+    {
+      "id": "ternarios-anidados",
+      "scope": null,
+      "title": "No anidar ternarios ni `??`",
+      "rule": "No se anidan ni encadenan ternarios, ni se encadenan varios `??`. Se saca a una función o a ifs con early return.",
+      "anchor": "4f8a2fe0576c4297aad2808f3bc3b2fd"
+    },
+    {
+      "id": "ternario-con-nullish",
+      "scope": null,
+      "title": "No mezclar ternario y `??` en la misma expresión",
+      "rule": "Un ternario y un `??` no van juntos en la misma expresión.",
+      "anchor": null
+    },
+    {
+      "id": "if-una-linea",
+      "scope": null,
+      "title": "No usar `if` de una línea",
+      "rule": "Nada de `if (x) return;` sin llaves: siempre llaves y el cuerpo en su línea.",
+      "anchor": "494b0aaaa14245e7aed418bb33674551"
+    },
+    {
+      "id": "ifs-anidados",
+      "scope": null,
+      "title": "No anidar ifs",
+      "rule": "No se anidan ifs: early returns o funciones auxiliares.",
+      "anchor": "17d5ff9e39d84ab884edaf9e9606b43a"
+    },
+    {
+      "id": "non-null-assertion",
+      "scope": null,
+      "title": "No usar la exclamación `!`",
+      "rule": "Ni non-null assertion (`foo!.bar`) ni definite assignment en propiedades (`id!: string`): no tenemos strict mode y no está claro que vayamos a tenerlo.",
+      "anchor": "980a7a203998414abb3fc8894de1b4d8"
+    },
+    {
+      "id": "enums-no-strings",
+      "scope": null,
+      "title": "Enums en lugar de strings constantes",
+      "rule": "Los conjuntos de valores (códigos de error, estados, tipos) se modelan con `enum`, no con arrays `as const` ni uniones de literales sueltas.",
+      "anchor": "8c834eb36da04b1a928effbb375a7123"
+    },
+    {
+      "id": "no-any",
+      "scope": null,
+      "title": "No usar `any`",
+      "rule": "`any` no se usa en ningún caso; si no se puede tipar, `unknown`.",
+      "anchor": "999e4fe5bee04192bac0dff4369ca938"
+    },
+    {
+      "id": "no-as",
+      "scope": null,
+      "title": "No forzar tipos con `as`",
+      "rule": "No se castea con `as` fuera de los tests (ahí `as unknown as Tipo` en vez de `as any`). Cualquier otro uso hay que justificarlo; casi siempre se evita tipando la declaración, estrechando con un type guard o arreglando el tipo de origen. `as const` no cuenta.",
+      "anchor": "2410bb0ab33e4d07997b2b5504b394f4"
+    },
+    {
+      "id": "responsabilidad-unica",
+      "scope": null,
+      "title": "Responsabilidad única",
+      "rule": "Una clase o función, una responsabilidad. Pistas de que no se cumple: funciones muy grandes, nombres con «y» u «o», mezcla de lógica de alto y bajo nivel.",
+      "anchor": null
+    },
+
+    {
+      "id": "back-logica-en-controladores",
+      "scope": "back",
+      "title": "[Back] Sin lógica en los controladores",
+      "rule": "El controlador sólo verifica usuario y permisos y transforma DTOs en modelos (y errores) y viceversa. La lógica va a un caso de uso.",
+      "anchor": "3d29e0e73fae40eebf1b0f0e7c374024"
+    },
+    {
+      "id": "back-nomenclatura-ficheros",
+      "scope": "back",
+      "title": "[Back] Nomenclatura de ficheros",
+      "rule": "Ficheros en minúsculas con guiones y sufijo de tipo: `business-effects.service.ts`, `business.module.ts`, `business-user.exception.ts`, `signed-business-id.decorator.ts`.",
+      "anchor": null
+    },
+    {
+      "id": "back-un-dto-por-fichero",
+      "scope": "back",
+      "title": "[Back] Un fichero sólo exporta un DTO",
+      "rule": "Puede haber más DTOs en el fichero, pero sólo uno exportado. Si se exporta un segundo, va a otro fichero.",
+      "anchor": "50f200f218044de7a57e0bdca0bbf0de"
+    },
+    {
+      "id": "back-throw-new-error",
+      "scope": "back",
+      "title": "[Back] No `throw new Error` hacia el cliente",
+      "rule": "Las excepciones que acaban en el cliente extienden `BillinError` con un enum de códigos, nunca `throw new Error('...')`. Excepciones: BAIRules, PubSub.",
+      "anchor": null
+    },
+    {
+      "id": "back-formato-errores-controlador",
+      "scope": "back",
+      "title": "[Back] Errores de controlador en el mismo formato",
+      "rule": "Los controladores devuelven siempre errores con la misma forma: `statusCode`, `message`, `type`, `description`, `errors[]`.",
+      "anchor": null
+    },
+    {
+      "id": "back-no-enum-decorator",
+      "scope": "back",
+      "title": "[Back] Sin `@Enum()` en entidades",
+      "rule": "En las entidades no se usa el decorador `@Enum()` (crea constraints en BBDD); se usa `@Property({ type: String, default: ..., length: ... })`.",
+      "anchor": null
+    },
+    {
+      "id": "back-subscribers-pubsub",
+      "scope": "back",
+      "title": "[Back] Suscriptores de PubSub",
+      "rule": "Los suscriptores de PubSub van en ficheros `.subscriber.ts`, la clase termina en `Subscriber` y viven en una carpeta `subscribers`, no en `services`. No confundir con los consumers de Redis.",
+      "anchor": null
+    },
+    {
+      "id": "back-ids-en-dtos",
+      "scope": "back",
+      "title": "[Back] Los campos id se llaman `...Id`",
+      "rule": "En DTOs de entrada y salida, un campo que es un id lleva `id` en el nombre (`remittanceId`, no `remittance`). El mapper lo renombra a lo que necesite el ORM.",
+      "anchor": null
+    },
+    {
+      "id": "back-dto-edicion-igual-creacion",
+      "scope": "back",
+      "title": "[Back] Editar usa el DTO de crear",
+      "rule": "Los endpoints de edición reutilizan el DTO/input de creación (añadiendo el id), de modo que siempre viaja la entidad completa.",
+      "anchor": "989e3e586fc8426eb6f83944c0cd50a9"
+    },
+    {
+      "id": "back-nullable-en-entidad",
+      "scope": "back",
+      "title": "[Back] Nullable en BBDD, nullable en el tipo",
+      "rule": "Si la columna puede ser null en BBDD, la propiedad de la entidad se tipa como nullable.",
+      "anchor": null
+    },
+    {
+      "id": "back-interrogacion-con-default",
+      "scope": "back",
+      "title": "[Back] Sin `?` cuando hay valor por defecto",
+      "rule": "En entidades no se marca una propiedad como opcional (`campo?: boolean = false`, `nullable: true`) si luego se le da un valor por defecto: `@Property({ default: false }) campo = false;`.",
+      "anchor": "3dfbef116f4d475a8a7a2989e5b32d1d"
+    },
+    {
+      "id": "back-logs-con-clase",
+      "scope": "back",
+      "title": "[Back] Logs con la etiqueta de la clase",
+      "rule": "Cada log empieza con el nombre de la clase entre corchetes: `[CreateMyExpensesInvoiceUseCase]: ...`.",
+      "anchor": "3dc5a81bc76f4bf3bccc4fcb8b82672b"
+    },
+    {
+      "id": "back-inputs-fuera-de-index",
+      "scope": "back",
+      "title": "[Back] Inputs de casos de uso fuera de `index.ts`",
+      "rule": "Los inputs de los casos de uso no se declaran ni se reexportan desde `index.ts`.",
+      "anchor": "230e9d64c43180769eb4dc6f5a5cae91"
+    },
+
+    {
+      "id": "front-nomenclatura-ficheros",
+      "scope": "front",
+      "title": "[Front] Nomenclatura de ficheros",
+      "rule": "Nombres fáciles de buscar (`DocumentList`, no `List` dentro de `documents`) y que coinciden con el elemento principal que exportan (componente, hook, servicio).",
+      "anchor": null
+    },
+    {
+      "id": "front-render-condicional-en-padre",
+      "scope": "front",
+      "title": "[Front] El renderizado condicional se decide en el padre",
+      "rule": "Si la decisión es pintar o no un componente, la toma el padre (`{show ? <Hijo /> : null}`). El hijo no recibe props tipo `shouldShow`, `isVisible`, `enabled` para hacer `if (!prop) return null`.",
+      "anchor": "4ac4d6b82476488ea726c7c981fc5cb2"
+    },
+    {
+      "id": "front-estructura-carpetas",
+      "scope": "front",
+      "title": "[Front] Estructura de carpetas",
+      "rule": "Se importa desde `index.ts`. En `pages`, una carpeta por página con `Xxx.tsx` y `XxxContainer.tsx` (presentación y lógica separadas). En `modules`, un módulo por dominio con `components`, `hooks`, `queries`, `store`, `services`, `models`, `helpers`, más `index.ts` y `messages.ts`. Los tests unitarios van junto al fichero que prueban, como `xxx.spec.ts`.",
+      "anchor": null
+    },
+    {
+      "id": "front-providers-contexto",
+      "scope": "front",
+      "title": "[Front] Providers y contexto antes que prop drilling",
+      "rule": "Si una prop atraviesa varios componentes que sólo la pasan hacia abajo, va en un provider/contexto.",
+      "anchor": null
+    },
+    {
+      "id": "front-30-lineas-logica",
+      "scope": "front",
+      "title": "[Front] Máximo 30 líneas de lógica en un componente",
+      "rule": "Entre la firma del componente y el `return` del render no hay más de 30 líneas; lo que sobre se saca a un hook o función.",
+      "anchor": "e93267d751f948b89a9a1c1543bf2fd1"
+    },
+    {
+      "id": "front-no-destructuring-props",
+      "scope": "front",
+      "title": "[Front] No hacer destructuring para pasar props",
+      "rule": "No se pasan props con spread (`<Comp {...props} />`, `<Comp {...{ a, b }} />`): cada prop se escribe explícita.",
+      "anchor": "b696e6c991e9495ebc7f8dffb235e0d5"
+    },
+    {
+      "id": "front-setvalues-formik",
+      "scope": "front",
+      "title": "[Front] `setValues` de Formik hay que justificarlo",
+      "rule": "Usar `setValues`/`setFieldValue` de Formik requiere una justificación (en la PR o en un comentario); si no la hay, se pregunta.",
+      "anchor": "ae889801a45a43678a78f98bf8f3d9f3"
+    },
+    {
+      "id": "front-usetheme",
+      "scope": "front",
+      "title": "[Front] El tema se lee con `useTheme`",
+      "rule": "Dentro de un componente, el tema se obtiene con `useTheme`, no importando el objeto de tema ni con colores a pelo. Única excepción: constantes definidas fuera del componente.",
+      "anchor": "6a0f198a3fd24c399bb70449594544b4"
+    },
+    {
+      "id": "front-handlers",
+      "scope": "front",
+      "title": "[Front] Handlers fuera del render y nombrados `handle*`",
+      "rule": "No se definen handlers inline en las props (`onChange={(e) => {...}}`): se declaran fuera del render, a ser posible fuera del componente si no necesitan su contexto. Se nombran empezando por `handle` (`handleOnChange`, `handleCalculateTotal`; nunca `onChangeHandler`). Con render props no está claro y se habla.",
+      "anchor": "a887219edd7346c690a70a822c4f06c0"
+    },
+    {
+      "id": "front-formathelpers-chunks",
+      "scope": "front",
+      "title": "[Front] Chunks de traducción con `formatHelpers`",
+      "rule": "Las traducciones que necesitan chunks (negritas, enlaces) usan los helpers de `formatHelpers`, no funciones ad hoc.",
+      "anchor": "ccb0b2b29f4d4204a4c9d3702d4f5a12"
+    },
+    {
+      "id": "front-e2e-given-when-then",
+      "scope": "front",
+      "title": "[Front · E2E] Given, When, Then en ese orden",
+      "rule": "Todo test e2e tiene al menos un Given, un When y un Then, en ese orden.",
+      "anchor": null
+    },
+    {
+      "id": "front-e2e-steps-estructura",
+      "scope": "front",
+      "title": "[Front · E2E] Estructura de step definitions",
+      "rule": "Los step definitions se agrupan por entidad y en ficheros de contexts (Given), events (When) y results (Then). Lo que necesita otra entidad va a la carpeta `commands`.",
+      "anchor": null
+    }
+  ]
+}

@@ -127,8 +127,37 @@ La sección «Voz» de `prompts/review-pr.md` lleva ejemplos reales de reviews a
 sacados de GitHub; si el tono se desvía, se ajusta ahí y se comprueba con un borrador.
 En la web, además, cada comentario se puede retocar antes de publicarlo.
 
+### Elogios
+
+De vez en cuando la review lleva un reconocimiento corto («Buen refactor! Queda mucho más
+claro»). `claude` lo propone en `praise` sólo cuando hay algo concreto que destacar (sección
+«Elogio» del prompt) y UATU decide si entra por defecto con `config.json → praise`:
+`rate` (probabilidad, 0.35) y `cooldown_days` (días mínimos entre elogios a la misma persona,
+5; registro en `state/praise.json`). En el borrador aparece como tarjeta aparte, con el motivo
+por el que se incluyó o se apartó, y se puede marcar, desmarcar o reescribir. Se publica al
+principio del cuerpo de la review, nunca como comentario inline, y una review puede llevar
+sólo el elogio.
+
 `severity` y `rule` siguen existiendo en la salida de `claude`, pero sólo para ordenar,
 recortar al tope y verlos en el borrador: no se publican.
+
+### Code Agreements
+
+Los acuerdos del equipo (Notion › Code Agreements) viven resumidos en
+`prompts/code-agreements.json`, uno por entrada con `id`, `title`, `rule`, `scope` (`null`,
+`front` o `back`) y `anchor` (el id de bloque de Notion con el que el equipo enlaza esa regla
+en las PRs; `null` si nunca se ha visto enlazada y el enlace cae en la página entera). El prompt
+recibe los que aplican al repo según `config.json → code_agreements.scope` (`gofre` = front,
+`tortilla` = back) y `claude` devuelve en cada hallazgo el campo `agreement` con el `id` del
+acuerdo del que sale, o vacío.
+
+El enlace a Notion lo añade UATU, no `claude`: `attach_agreement` lo pega como última línea
+del comentario (`frase corta` + salto de línea + URL con anclaje), igual que lo escribe el
+equipo a mano, y deja `rule` como `Code Agreements › <título>`. Si un acuerdo cambia de sitio
+en Notion, se actualiza su `anchor` en el JSON y ya; los anclajes se sacaron de los enlaces
+reales en comentarios de gofre y tortilla, porque la página no es pública y no se puede leer sin
+sesión. Para añadir una regla nueva basta con una entrada más en el JSON: el esquema de salida y
+el prompt la recogen solos.
 
 La review no lleva pie visible por defecto. Con `visible_signature` en `config.json`
 (p. ej. `"Revisado con UATU"`) se añade una línea al final del cuerpo de la review. El
