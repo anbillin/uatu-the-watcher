@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>UATU · el Vigilante · revisión de PRs</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M4 32q28-30 56 0-28 30-56 0z' fill='%23e6ebff'/%3E%3Ccircle cx='32' cy='32' r='13' fill='%236fb1ff'/%3E%3Ccircle cx='32' cy='32' r='6' fill='%23070a1a'/%3E%3C/svg%3E">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* ------------------------------------------------------------------
+     UATU · el Vigilante. Tema inspirado en Uatu (Marvel): un observador
+     cósmico que lo ve todo desde el Área Azul de la Luna y que, por
+     juramento, no interfiere. Aquí: Uatu observa las PRs; intervenir
+     (publicar) es siempre decisión tuya.
+     Oscuro = el cosmos desde la Luna. Claro = la superficie del Área Azul.
+     ------------------------------------------------------------------ */
+  :root {
+    --bg: #e8ecf6; --bg-2: #dfe5f2; --card: #f8faff; --card-2: #eef2fb; --ink: #121a36; --muted: #5a6487;
+    --line: #c7d0e6; --line-2: #dfe5f2;
+    --accent: #1f5fd6; --accent-2: #5f8df0; --glow: rgba(31,95,214,.22); --iris: #2b6fe6;
+    --ok: #15804a; --warn: #9a6a00; --bad: #c8303f; --hit: rgba(214,164,36,.16);
+    --nebula-1: rgba(95,141,240,.18); --nebula-2: rgba(150,110,230,.12); --star: rgba(18,26,54,.35);
+    --moon: rgba(255,255,255,.55); --shadow: 0 1px 2px rgba(18,26,54,.06), 0 8px 24px -16px rgba(18,26,54,.25);
+    --display: "Avenir Next", "Futura", "Trebuchet MS", system-ui, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #070a1a; --bg-2: #0b1026; --card: #0f1430; --card-2: #141a3a; --ink: #e6ebff; --muted: #8b95bd;
+            --line: #232b52; --line-2: #1a2143;
+            --accent: #6fb1ff; --accent-2: #9ad0ff; --glow: rgba(111,177,255,.35); --iris: #7cc0ff;
+            --ok: #4ad295; --warn: #e8b84a; --bad: #ff6b7a; --hit: rgba(232,184,74,.13);
+            --nebula-1: rgba(79,124,255,.22); --nebula-2: rgba(150,90,255,.16); --star: rgba(230,236,255,.75);
+            --moon: rgba(190,210,255,.07); --shadow: 0 1px 0 rgba(255,255,255,.03) inset, 0 12px 32px -20px rgba(0,0,0,.8); }
+  }
+  * { box-sizing: border-box; }
+  html, body { max-width: 100%; overflow-x: hidden; }
+  body { margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+         background: var(--bg); color: var(--ink); min-height: 100vh; }
+  /* el cosmos: nebulosa, la Luna y un campo de estrellas fijo tras todo */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(1100px 600px at 85% -10%, var(--nebula-1), transparent 65%),
+      radial-gradient(900px 700px at -10% 100%, var(--nebula-2), transparent 65%),
+      radial-gradient(728.0px 728.0px at 92% 18%, var(--moon), transparent 60%),
+      linear-gradient(var(--bg), var(--bg-2));
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: .9;
+    background-image:
+      radial-gradient(1.7px 1.7px at 12% 22%, var(--star) 50%, transparent 51%),
+      radial-gradient(1.4px 1.4px at 28% 68%, var(--star) 50%, transparent 51%),
+      radial-gradient(2.1px 2.1px at 41% 12%, var(--star) 50%, transparent 51%),
+      radial-gradient(1.4px 1.4px at 55% 84%, var(--star) 50%, transparent 51%),
+      radial-gradient(1.8px 1.8px at 66% 36%, var(--star) 50%, transparent 51%),
+      radial-gradient(1.4px 1.4px at 78% 72%, var(--star) 50%, transparent 51%),
+      radial-gradient(2.2px 2.2px at 88% 48%, var(--star) 50%, transparent 51%),
+      radial-gradient(1.4px 1.4px at 7% 90%, var(--star) 50%, transparent 51%),
+      radial-gradient(1.5px 1.5px at 95% 88%, var(--star) 50%, transparent 51%),
+      radial-gradient(1.4px 1.4px at 48% 52%, var(--star) 50%, transparent 51%),
+      radial-gradient(2.0px 2.0px at 20% 44%, var(--star) 50%, transparent 51%),
+      radial-gradient(1.4px 1.4px at 72% 8%, var(--star) 50%, transparent 51%);
+    background-size: 640px 640px, 720px 720px, 800px 800px, 560px 560px, 900px 900px, 680px 680px,
+                     760px 760px, 620px 620px, 840px 840px, 700px 700px, 580px 580px, 960px 960px;
+    animation: drift 240s linear infinite;
+  }
+  @keyframes drift { to { background-position: 0 -640px, 0 -720px, 0 -800px, 0 -560px, 0 -900px, 0 -680px,
+                                               0 -760px, 0 -620px, 0 -840px, 0 -700px, 0 -580px, 0 -960px; } }
+  @media (prefers-reduced-motion: reduce) { body::after, .eye, .pill.busy::before { animation: none !important; } }
+
+  a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
+  code { font-family: var(--mono); font-size: .95em; }
+
+  /* ---------- cabecera: el ojo del Vigilante ---------- */
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 24px; position: sticky; top: 0; z-index: 2;
+           background: color-mix(in srgb, var(--card) 82%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+           border-bottom: 1px solid var(--line); }
+  header::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+                  background: linear-gradient(90deg, transparent, var(--accent) 30%, var(--accent-2) 50%, var(--accent) 70%, transparent); opacity: .7; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .eye { width: 34px; height: 34px; flex: none; filter: drop-shadow(0 0 8px var(--glow)); animation: gaze 7s ease-in-out infinite; }
+  @keyframes gaze { 0%, 86%, 100% { transform: scaleY(1); } 90% { transform: scaleY(.08); } 94% { transform: scaleY(1); } }
+  .wordmark { display: flex; flex-direction: column; line-height: 1.05; }
+  .wordmark h1 { font: 700 20px/1 var(--display); margin: 0; letter-spacing: .32em; text-indent: .04em;
+                 background: linear-gradient(180deg, var(--ink), var(--accent)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .wordmark .tag { font: 500 10px/1.2 var(--display); letter-spacing: .22em; text-transform: uppercase; color: var(--muted); margin-top: 4px; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header .spacer { flex: 1; }
+  header .strike { text-decoration: line-through; }
+
+  main { max-width: 1200px; margin: 0 auto; padding: 22px 24px 80px; }
+
+  /* ---------- controles ---------- */
+  button { font: inherit; padding: 6px 13px; border-radius: 8px; border: 1px solid var(--line);
+           background: var(--card); color: var(--ink); cursor: pointer; white-space: nowrap; transition: border-color .15s, box-shadow .15s, transform .05s; }
+  button:hover:not(:disabled) { border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: linear-gradient(180deg, var(--accent-2), var(--accent)); border-color: transparent; color: #061024; font-weight: 600; }
+  button.ok { background: var(--ok); border-color: var(--ok); color: #fff; font-weight: 600; }
+  button.danger { color: var(--bad); }
+  button.danger:hover:not(:disabled) { border-color: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 25%, transparent); }
+  button.link { border: none; background: none; color: var(--accent); padding: 0; box-shadow: none !important; }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line);
+          color: var(--muted); white-space: nowrap; background: color-mix(in srgb, var(--muted) 8%, transparent); }
+  .pill.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 55%, transparent); background: color-mix(in srgb, var(--ok) 12%, transparent); }
+  .pill.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 55%, transparent); background: color-mix(in srgb, var(--warn) 12%, transparent); }
+  .pill.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 55%, transparent); background: color-mix(in srgb, var(--bad) 12%, transparent); }
+  .pill.accent { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  /* la revisión en curso: la mirada del Vigilante, un iris que late */
+  .pill.busy::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-right: 7px; border-radius: 50%; vertical-align: -1px;
+                       background: radial-gradient(circle, var(--ink) 0 28%, var(--iris) 30% 70%, transparent 72%);
+                       box-shadow: 0 0 0 0 var(--glow); animation: gazepulse 1.6s ease-out infinite; }
+  @keyframes gazepulse { 0% { box-shadow: 0 0 0 0 var(--glow); } 100% { box-shadow: 0 0 0 7px transparent; } }
+
+  h2 { display: flex; align-items: center; gap: 10px; font: 600 12px/1.2 var(--display); margin: 26px 0 10px; color: var(--muted);
+       text-transform: uppercase; letter-spacing: .18em; }
+  h2::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--glow); flex: none; }
+  h2::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
+  th, td { text-align: left; padding: 10px 14px; border-top: 1px solid var(--line-2); vertical-align: top; }
+  th { font: 600 11px/1.2 var(--display); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); border-top: none; background: var(--card-2); }
+  tbody tr:hover td { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+  td.num { font-family: var(--mono); white-space: nowrap; }
+  td .title { font-weight: 500; }
+  td .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  td.actions { white-space: nowrap; text-align: right; }
+  td.actions button + button { margin-left: 6px; }
+  .msg { color: var(--muted); font-size: 12px; margin-top: 4px; max-width: 420px; white-space: normal; }
+  .msg.bad { color: var(--bad); }
+  .empty { padding: 26px; color: var(--muted); text-align: center; background: var(--card); border: 1px dashed var(--line); border-radius: 12px; }
+  .empty.quote { font-family: var(--display); letter-spacing: .02em; }
+  .empty.quote em { display: block; font-style: italic; color: var(--ink); font-size: 15px; margin-bottom: 6px; }
+  .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg);
+           padding: 10px 16px; border-radius: 10px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 80vw; box-shadow: 0 10px 30px -10px rgba(0,0,0,.6); }
+  .toast.show { opacity: 1; }
+  .toast.bad { background: var(--bad); color: #fff; }
+
+  /* ---------- borrador: lo que el Vigilante ha visto ---------- */
+  .draft-head { position: relative; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; overflow: hidden; box-shadow: var(--shadow); }
+  .draft-head::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+                        background: linear-gradient(90deg, var(--accent), var(--accent-2), var(--nebula-2)); }
+  .draft-head h2 { display: block; text-transform: none; letter-spacing: 0; font: 600 18px/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+                   color: var(--ink); margin: 0 0 4px; }
+  .draft-head h2::before, .draft-head h2::after { display: none; }
+  .draft-head .meta { color: var(--muted); }
+  .draft-head .meta span + span::before { content: " · "; }
+  .banner { margin-top: 12px; padding: 8px 12px; border-radius: 8px; font-size: 13px; }
+  .banner.warn { background: var(--hit); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent); }
+  .banner.ok { color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 55%, transparent); background: color-mix(in srgb, var(--ok) 8%, transparent); }
+  textarea { width: 100%; font: 13px/1.45 var(--mono); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+             background: var(--bg); color: var(--ink); resize: vertical; min-height: 44px; overflow: hidden; }
+  textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; margin-top: 14px; overflow: hidden; box-shadow: var(--shadow); transition: opacity .15s; }
+  .card.off { opacity: .45; }
+  .card .bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line-2); background: var(--card-2); }
+  .card .bar .path { font-family: var(--mono); font-size: 13px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .bar .rule { color: var(--muted); font-size: 12px; }
+  .card .bar label { color: var(--muted); font-size: 12px; cursor: pointer; }
+  pre.code { margin: 0; padding: 8px 0; font: 12px/1.5 var(--mono); overflow-x: auto; border-bottom: 1px solid var(--line-2); background: var(--bg); }
+  pre.code .ln { display: block; padding: 0 14px; white-space: pre; }
+  pre.code .ln.hit { background: var(--hit); box-shadow: inset 3px 0 0 var(--warn); }
+  pre.code .n { display: inline-block; width: 44px; color: var(--muted); text-align: right; margin-right: 14px; user-select: none; }
+  .card .body { padding: 12px 14px; }
+  .footer { display: flex; align-items: center; gap: 10px; margin-top: 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px;
+            position: sticky; bottom: 12px; background: color-mix(in srgb, var(--card) 88%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+            box-shadow: 0 -10px 30px -20px rgba(0,0,0,.5); }
+  .footer .spacer { flex: 1; }
+  .footer .hint { color: var(--muted); font-size: 12px; }
+  pre.log { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; font: 12px/1.5 var(--mono);
+            max-height: 320px; overflow: auto; white-space: pre-wrap; color: var(--muted); }
+  .oath { margin: 40px auto 0; text-align: center; color: var(--muted); font: italic 12px/1.5 var(--display); letter-spacing: .04em; opacity: .8; }
+  .oath::before { content: ""; display: block; width: 48px; height: 1px; margin: 0 auto 12px; background: var(--line); }
+
+  /* ---------- móvil ---------- */
+  @media (max-width: 720px) {
+    header { flex-wrap: wrap; gap: 8px; padding: 10px 12px; }
+    .brand { flex: 1 1 100%; }
+    .eye { width: 28px; height: 28px; }
+    .wordmark h1 { font-size: 17px; }
+    header #who, header #updated { display: none; }
+    header .spacer { display: none; }
+    header button { flex: 1; min-height: 38px; }
+    main { padding: 12px 10px 120px; }
+    h2 { margin: 18px 0 8px; font-size: 11px; }
+    button { min-height: 38px; padding: 6px 12px; }
+    button.link { min-height: 0; }
+    /* la tabla pasa a tarjetas */
+    table, tbody, tr, td { display: block; width: 100%; }
+    thead { display: none; }
+    tr { border-top: 1px solid var(--line-2); padding: 10px 12px; }
+    tr:first-child { border-top: none; }
+    td { padding: 0; border-top: none; }
+    tbody tr:hover td { background: none; }
+    td.num { display: inline; font-size: 15px; margin-right: 6px; }
+    td.num + td { display: inline; }
+    td.num + td .title { display: inline; }
+    td .meta { display: block; margin: 4px 0 8px; line-height: 1.5; }
+    td.actions { text-align: left; margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    td.actions button { flex: 1 1 auto; }
+    td.actions button + button { margin-left: 0; }
+    .msg { max-width: none; }
+    td .meta, td .meta code, .draft-head .meta, .draft-head .meta code { overflow-wrap: anywhere; }
+    td .title { overflow-wrap: anywhere; }
+    header button { white-space: normal; }
+    /* borrador */
+    .draft-head { padding: 12px 14px; }
+    .draft-head h2 { font-size: 16px; }
+    .draft-head .meta { font-size: 12px; }
+    .draft-head .meta span { display: inline-block; }
+    textarea { font-size: 16px; }  /* evita el zoom automático de iOS */
+    .card .bar { flex-wrap: wrap; row-gap: 4px; padding: 8px 10px; }
+    .card .bar .path { flex: 1 1 100%; white-space: normal; word-break: break-all; }
+    .card .body { padding: 10px; }
+    pre.code { font-size: 11px; }
+    pre.code .n { width: 32px; margin-right: 8px; }
+    pre.code .ln { padding: 0 10px; }
+    .footer { flex-wrap: wrap; gap: 8px; padding: 10px; bottom: 0; border-radius: 12px 12px 0 0; margin: 20px -10px 0; }
+    .footer .hint { display: none; }
+    .footer .spacer { display: none; }
+    .footer button { flex: 1 1 30%; }
+    .footer #btn-publish { flex: 1 1 100%; order: 3; }
+    .toast { bottom: auto; top: 60px; }
+    pre.log { font-size: 11px; max-height: 220px; }
+    .oath { display: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand" title="Uatu, el Vigilante: observa el multiverso desde el Área Azul de la Luna y, por juramento, no interfiere">
+    <svg class="eye" viewBox="0 0 64 64" aria-hidden="true">
+      <defs>
+        <radialGradient id="iris" cx="50%" cy="45%" r="55%">
+          <stop offset="0" stop-color="var(--accent-2)"/><stop offset=".55" stop-color="var(--iris)"/><stop offset="1" stop-color="var(--accent)"/>
+        </radialGradient>
+      </defs>
+      <path d="M4 32 Q32 2 60 32 Q32 62 4 32 Z" fill="var(--card)" stroke="var(--ink)" stroke-width="2.5" stroke-linejoin="round"/>
+      <circle cx="32" cy="32" r="13.5" fill="url(#iris)" stroke="var(--ink)" stroke-width="1.5"/>
+      <circle cx="32" cy="32" r="6" fill="var(--ink)"/>
+      <circle cx="27.5" cy="27" r="2.2" fill="#fff" opacity=".9"/>
+    </svg>
+    <div class="wordmark"><h1>UATU</h1><span class="tag">El Vigilante · observa, <span class="strike">no</span> interfiere</span></div>
+  </div>
+  <span class="sub" id="who"></span>
+  <span class="spacer"></span>
+  <span class="sub" id="updated"></span>
+  <button id="btn-refresh" onclick="refresh(true)">Actualizar</button>
+  <button id="btn-review-all" onclick="reviewAll()">Revisar pendientes</button>
+  <button onclick="toggleLog()">Log</button>
+</header>
+<main id="main"></main>
+<div class="toast" id="toast"></div>
+
+<script>
+const S = { prs: [], jobs: {}, config: {}, generatedAt: null, error: null,
+            view: 'list', draft: null, showLog: false, logLines: [], timer: null };
+
+// ------------------------------------------------------------ util
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtAgo = iso => {
+  const d = (Date.now() - new Date(iso)) / 1000;
+  if (d < 3600) return `hace ${Math.max(1, Math.round(d / 60))} min`;
+  if (d < 86400) return `hace ${Math.round(d / 3600)} h`;
+  return `hace ${Math.round(d / 86400)} d`;
+};
+function toast(msg, bad) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast show' + (bad ? ' bad' : '');
+  clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', bad ? 6000 : 2500);
+}
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: body ? {'Content-Type': 'application/json'} : {},
+                               body: body ? JSON.stringify(body) : undefined });
+  const data = await r.json().catch(() => ({ error: `respuesta ${r.status} no es JSON` }));
+  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  return data;
+}
+
+// ------------------------------------------------------------ datos
+async function refresh(force) {
+  const b = document.getElementById('btn-refresh'); b.disabled = true;
+  try {
+    const d = await api('GET', '/api/prs' + (force ? '?refresh=1' : ''));
+    Object.assign(S, { prs: d.prs, jobs: d.jobs, config: d.config, generatedAt: d.generated_at, error: null });
+  } catch (e) { S.error = e.message; }
+  finally { b.disabled = false; }
+  if (S.showLog) await loadLog();
+  render(); schedule();
+}
+const terminal = j => j && !(j.status === 'queued' || j.status === 'running');
+async function pollJobs() {
+  try {
+    const d = await api('GET', '/api/jobs');
+    const before = S.jobs; S.jobs = d.jobs;
+    const finishedOne = Object.keys(d.jobs).some(k => terminal(d.jobs[k]) && !terminal(before[k]));
+    if (finishedOne) { await refresh(false); return; }
+    if (S.showLog) await loadLog();
+    render();
+  } catch (e) { /* siguiente intento */ }
+  schedule();
+}
+const anyBusy = () => Object.values(S.jobs).some(j => j.status === 'queued' || j.status === 'running');
+function schedule() {
+  clearTimeout(S.timer);
+  S.timer = setTimeout(anyBusy() ? pollJobs : () => refresh(false), anyBusy() ? 4000 : 90000);
+}
+async function loadLog() { try { S.logLines = (await api('GET', '/api/log')).lines; } catch (e) {} }
+
+// ------------------------------------------------------------ acciones
+async function review(repo, number, full) {
+  try {
+    await api('POST', '/api/review', { repo, number, full: !!full });
+    toast(`${repo}#${number} en cola`);
+    await pollJobs();
+  } catch (e) { toast(e.message, true); }
+}
+async function reviewAll() {
+  const b = document.getElementById('btn-review-all'); b.disabled = true;
+  try {
+    const d = await api('POST', '/api/review-all', {});
+    toast(d.jobs.length ? `${d.jobs.length} PRs en cola (${d.pending} pendientes)` : 'No hay PRs pendientes');
+    await pollJobs();
+  } catch (e) { toast(e.message, true); }
+  finally { b.disabled = false; }
+}
+async function openDraft(repo, number) {
+  try {
+    S.draft = await api('GET', `/api/drafts/${repo}/${number}`);
+    S.view = 'draft'; history.replaceState(null, '', `#${repo}/${number}`); render(true); window.scrollTo(0, 0);
+  } catch (e) { toast(e.message, true); }
+}
+function backToList() { S.view = 'list'; S.draft = null; history.replaceState(null, '', location.pathname); render(true); }
+
+function collectEdits() {
+  const comments = [...document.querySelectorAll('.card[data-i]')].map(card => ({
+    body: card.querySelector('textarea').value,
+    enabled: card.querySelector('input[type=checkbox]').checked,
+  }));
+  return { summary: document.getElementById('summary').value, comments };
+}
+async function saveDraft(silent) {
+  const d = S.draft;
+  S.draft = await api('PUT', `/api/drafts/${d.repo}/${d.number}`, collectEdits());
+  if (!silent) { toast('Borrador guardado'); render(true); }
+}
+async function publish() {
+  const d = S.draft;
+  try {
+    await saveDraft(true);
+    const n = S.draft.comments.filter(c => c.enabled && c.body.trim()).length;
+    const stale = d.stale ? '\n\nOJO: la PR tiene commits nuevos; los comentarios se anclan al commit revisado.' : '';
+    if (!confirm(`Publicar ${n} comentario(s) en ${d.repo}#${d.number} como ${S.config.me}?${stale}`)) return;
+    S.draft = await api('POST', `/api/drafts/${d.repo}/${d.number}/publish`, {});
+    toast(`Publicados ${n} comentarios en ${d.repo}#${d.number}`);
+    await refresh(true); backToList();
+  } catch (e) { toast(e.message, true); }
+}
+async function discard() {
+  const d = S.draft;
+  if (!confirm(`Descartar el borrador de ${d.repo}#${d.number}?\n\nNo se publica nada y la PR queda como revisada hasta este commit; si llegan commits nuevos, se revisará sólo el delta.`)) return;
+  try {
+    S.draft = await api('POST', `/api/drafts/${d.repo}/${d.number}/discard`, {});
+    toast('Borrador descartado');
+    await refresh(true); backToList();
+  } catch (e) { toast(e.message, true); }
+}
+function toggleCard(i) { document.querySelector(`.card[data-i="${i}"]`).classList.toggle('off'); updateCount(); }
+function autosize(t) { t.style.height = 'auto'; t.style.height = (t.scrollHeight + 2) + 'px'; }
+function updateCount() {
+  const n = [...document.querySelectorAll('.card[data-i]')].filter(c => c.querySelector('input').checked && c.querySelector('textarea').value.trim()).length;
+  const b = document.getElementById('btn-publish'); if (b) b.textContent = `Publicar ${n} comentario${n === 1 ? '' : 's'}`;
+}
+async function toggleLog() { S.showLog = !S.showLog; if (S.showLog) await loadLog(); render(true); }
+
+// ------------------------------------------------------------ render
+function render(force) {
+  document.getElementById('who').textContent = S.config.me ? `${S.config.org} · ${S.config.me}` : '';
+  document.getElementById('updated').textContent = S.generatedAt ? `lista de ${S.generatedAt.slice(11, 16)}` : '';
+  const main = document.getElementById('main');
+  // En la vista de borrador no se repinta por el sondeo: se perdería el scroll y lo editado.
+  if (S.view === 'draft' && !force && main.querySelector('.draft-head')) {
+    const l = main.querySelector('pre.log'); if (l) l.textContent = S.logLines.join('\n') || '(vacío)';
+    return;
+  }
+  const y = window.scrollY;
+  let html = S.view === 'draft' ? renderDraft() : renderList();
+  if (S.showLog) html += `<h2>Log</h2><pre class="log">${esc(S.logLines.join('\n')) || '(vacío)'}</pre>`;
+  main.innerHTML = html;
+  if (S.view === 'draft') { updateCount(); main.querySelectorAll('textarea').forEach(autosize); }
+  if (S.showLog) { const l = main.querySelector('pre.log'); if (l) l.scrollTop = l.scrollHeight; }
+  if (!force) window.scrollTo(0, y);
+}
+
+function statusCell(pr) {
+  const job = S.jobs[pr.key], d = pr.draft, out = [];
+  if (job && job.status === 'queued') out.push('<span class="pill accent">en cola</span>');
+  else if (job && job.status === 'running') out.push(`<span class="pill accent busy">revisando desde ${job.started_at.slice(11, 16)}</span>`);
+  if (d && d.status === 'pending') {
+    out.push(`<span class="pill warn">borrador: ${d.comments} com.${d.stale ? ' · obsoleto' : ''}</span>`);
+  } else if (pr.status === 'al-dia') {
+    const l = pr.last; const what = l.status === 'discarded' ? 'descartada' : l.status === 'reviewed' ? `${l.findings} com.` : l.status;
+    out.push(`<span class="pill ok">al día · ${what}</span>`);
+  } else if (pr.status === 'nuevos-commits') {
+    out.push('<span class="pill warn">commits nuevos</span>');
+  } else if (!job || job.status !== 'running') {
+    out.push('<span class="pill">sin revisar</span>');
+  }
+  let msg = '';
+  if (job && (job.status === 'error' || job.status === 'skipped')) {
+    msg = `<div class="msg ${job.status === 'error' ? 'bad' : ''}">${job.status === 'error' ? 'Error: ' : 'Omitida: '}${esc(job.message)}</div>`;
+  } else if (job && job.status === 'done' && !(d && d.status === 'pending')) {
+    msg = `<div class="msg">${esc(job.message)}</div>`;
+  }
+  return out.join(' ') + msg;
+}
+function actionsCell(pr) {
+  const job = S.jobs[pr.key], d = pr.draft, busy = job && (job.status === 'queued' || job.status === 'running');
+  const r = `'${pr.repo}', ${pr.number}`;
+  const out = [];
+  if (d && d.status === 'pending') out.push(`<button class="primary" onclick="openDraft(${r})">Ver borrador</button>`);
+  if (busy) { out.push(`<button disabled>Revisando…</button>`); return out.join(''); }
+  if (pr.status === 'al-dia' && !(d && d.status === 'pending'))
+    out.push(`<button onclick="review(${r}, true)" title="Ignora la revisión anterior y revisa toda la PR">Revisar de nuevo</button>`);
+  else if (pr.status === 'nuevos-commits' || (d && d.stale))
+    out.push(`<button onclick="review(${r}, false)" title="Sólo los commits nuevos">Revisar delta</button>`);
+  else if (!(d && d.status === 'pending'))
+    out.push(`<button class="primary" onclick="review(${r}, false)">Revisar</button>`);
+  if (d && d.status !== 'pending') out.push(`<button class="link" onclick="openDraft(${r})">ver ${d.status === 'published' ? 'publicado' : 'descartado'}</button>`);
+  return out.join('');
+}
+function renderList() {
+  if (S.error) return `<div class="empty">No se pudo cargar la lista de PRs.<br><code>${esc(S.error)}</code><br><br><button onclick="refresh(true)">Reintentar</button></div>`;
+  if (!S.prs.length && !S.generatedAt) return `<div class="empty">Observando el multiverso…</div>`;
+  const repos = S.config.repos || [];
+  const drafts = S.prs.filter(p => p.draft && p.draft.status === 'pending');
+  const draftsHtml = drafts.length ? `<h2>Borradores pendientes de publicar · ${drafts.length}</h2>
+    <table><tbody>${drafts.map(pr => `
+      <tr>
+        <td class="num"><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a></td>
+        <td><div class="title">${esc(pr.title)}</div>
+            <div class="meta">${esc(pr.author)} · generado ${esc(pr.draft.created_at.slice(5, 16))}${pr.draft.cost_usd != null ? ` · ${pr.draft.cost_usd.toFixed(2)} USD` : ''}</div></td>
+        <td><span class="pill warn">${pr.draft.comments} de ${pr.draft.total} com.${pr.draft.stale ? ' · obsoleto' : ''}</span></td>
+        <td class="actions"><button class="primary" onclick="openDraft('${pr.repo}', ${pr.number})">Ver borrador</button></td>
+      </tr>`).join('')}</tbody></table>`
+    : `<div class="empty quote" style="margin-top:8px"><em>«Observo todo lo que ocurre aquí, pero no interfiero.»</em>No hay borradores pendientes. Pulsa «Revisar» en una PR para que el Vigilante genere uno.</div>`;
+  return draftsHtml + repos.map(repo => {
+    const rows = S.prs.filter(p => p.repo === repo);
+    const body = rows.length ? rows.map(pr => `
+      <tr>
+        <td class="num"><a href="${esc(pr.url)}" target="_blank" rel="noopener">#${pr.number}</a></td>
+        <td><div class="title">${esc(pr.title)}</div>
+            <div class="meta">${esc(pr.author)} · <code>${esc(pr.head_ref)}</code> → ${esc(pr.base_ref)} ·
+                 <span style="color:var(--ok)">+${pr.additions}</span> <span style="color:var(--bad)">−${pr.deletions}</span> ·
+                 ${fmtAgo(pr.updated_at)}</div></td>
+        <td>${statusCell(pr)}</td>
+        <td class="actions">${actionsCell(pr)}</td>
+      </tr>`).join('') : `<tr><td colspan="4" style="color:var(--muted)">Nada que observar: sin PRs candidatas</td></tr>`;
+    return `<h2>${esc(S.config.org)}/${esc(repo)} <span style="font-weight:400">· ${rows.length}</span></h2>
+      <table><thead><tr><th style="width:70px">PR</th><th>Título</th><th style="width:230px">Estado</th><th style="width:220px"></th></tr></thead>
+      <tbody>${body}</tbody></table>`;
+  }).join('') + `<p class="oath">Uatu, el Vigilante, observa la Tierra desde el Área Azul de la Luna y juró no interferir jamás.<br>Aquí observa las PRs de ${esc(S.config.org || '')}: intervenir (publicar) es siempre decisión tuya.</p>`;
+}
+
+function renderDraft() {
+  const d = S.draft, pr = S.prs.find(p => p.key === `${d.repo}#${d.number}`);
+  const stale = pr && pr.head !== d.head; d.stale = stale;
+  const ro = d.status !== 'pending';
+  const scope = d.mode === 'full' ? 'PR completa' : `delta ${d.last_sha.slice(0, 10)}..${d.head.slice(0, 10)}`;
+  const c = d.claude || {};
+  let html = `
+    <button class="link" onclick="backToList()">← Volver a la lista</button>
+    <div class="draft-head" style="margin-top:10px">
+      <h2><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.repo)}#${d.number}</a> · ${esc(d.title)}</h2>
+      <div class="meta"><span>${esc(d.author)}</span><span><code>${esc(d.head_ref)}</code> → ${esc(d.base_ref)}</span>
+        <span>${scope}</span>${d.lines_changed != null ? `<span>${d.lines_changed} líneas</span>` : ''}<span>commit <code>${d.head.slice(0, 10)}</code></span>
+        <span>generado ${esc(d.created_at)}</span>${c.cost_usd != null ? `<span>${c.turns} turnos · ${c.cost_usd.toFixed(2)} USD</span>` : ''}</div>
+      ${ro ? `<div class="banner ok">Este borrador ya está ${d.status === 'published' ? `publicado (${esc(d.published_at)}, ${d.published_comments} comentarios)` : `descartado (${esc(d.discarded_at)})`}. Sólo lectura.</div>` : ''}
+      ${!ro && stale ? `<div class="banner warn">La PR tiene commits nuevos desde que se generó este borrador. Puedes publicarlo igual (los comentarios se anclan al commit revisado) o volver a la lista y revisar el delta.</div>` : ''}
+      <div style="margin-top:12px"><label class="rule">Resumen (cuerpo de la review; normalmente vacío)</label>
+        <textarea id="summary" ${ro ? 'readonly' : ''} style="min-height:44px" oninput="autosize(this)">${esc(d.summary)}</textarea></div>
+    </div>`;
+  if (!d.comments.length) html += `<div class="empty" style="margin-top:14px">El Vigilante no vio nada que comentar en esta PR. Puedes descartar el borrador para darla por revisada.</div>`;
+  html += d.comments.map((cm, i) => {
+    const rng = cm.start_line < cm.line ? `${cm.start_line}-${cm.line}` : cm.line;
+    const code = (cm.context || []).map(r => `<span class="ln ${r.hit ? 'hit' : ''}"><span class="n">${r.n}</span>${esc(r.text)}</span>`).join('') || '<span class="ln">(sin contexto)</span>';
+    return `
+    <div class="card ${cm.enabled ? '' : 'off'}" data-i="${i}">
+      <div class="bar">
+        <span class="path"><a href="${esc(d.url)}/files" target="_blank" rel="noopener">${esc(cm.path)}</a>:${rng}</span>
+        <span class="rule" title="interno, no se publica">${esc(cm.severity)} · ${esc(cm.rule)}</span>
+        <label><input type="checkbox" ${cm.enabled ? 'checked' : ''} ${ro ? 'disabled' : ''} onchange="toggleCard(${i})"> publicar</label>
+      </div>
+      <pre class="code">${code}</pre>
+      <div class="body"><textarea ${ro ? 'readonly' : ''} oninput="updateCount(); autosize(this)">${esc(cm.body)}</textarea></div>
+    </div>`;
+  }).join('');
+  if (!ro) html += `
+    <div class="footer">
+      <button class="danger" onclick="discard()">Descartar borrador</button>
+      <span class="hint">Uatu sólo observa: nada llega a GitHub hasta que tú decides intervenir. Descartar da la PR por revisada hasta este commit.</span>
+      <span class="spacer"></span>
+      <button onclick="saveDraft()">Guardar cambios</button>
+      <button id="btn-publish" class="ok" onclick="publish()">Publicar</button>
+    </div>`;
+  return html;
+}
+
+refresh(true).then(() => {
+  const m = location.hash.match(/^#([A-Za-z0-9._-]+)\/(\d+)$/);
+  if (m) openDraft(m[1], parseInt(m[2], 10));
+});
+</script>
+</body>
+</html>

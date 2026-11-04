@@ -1,0 +1,135 @@
+# UATU
+
+Uatu, el Vigilante: observa y, de vez en cuando, interviene. Revisa las PRs abiertas de los
+compañeros en `BillinTeam/gofre` y `BillinTeam/tortilla` con `claude` y deja un **borrador**
+de review por PR. Nada llega a GitHub hasta que lo ves en la web local y pulsas «Publicar»;
+entonces sale como comentarios inline con el usuario `anbillin`.
+
+La web (`web/index.html`) lleva la estética del personaje: el ojo del Vigilante como logo, fondo
+cósmico visto desde el Área Azul de la Luna (modo oscuro) o la propia superficie lunar (modo claro),
+y el juramento de no interferir como recordatorio de que publicar es siempre decisión tuya.
+
+## Uso diario
+
+```bash
+./web.sh start            # servidor en segundo plano, accesible desde la red local
+./web.sh start --local    # sólo desde este Mac
+./web.sh status           # pid, URLs y cola de revisiones
+./web.sh stop             # (pierde la cola en memoria; los borradores quedan en disco)
+./web.sh restart
+./web.sh log              # sigue logs/server.out.log
+```
+
+`web.sh start` imprime la URL local y la de la red (`http://<ip>:8787/`). Para una sesión
+en primer plano que abra el navegador: `python3 server.py`.
+
+1. Arriba del todo, **Borradores pendientes de publicar**: lo que hay generado y aún no
+   se ha mandado. Debajo, las PRs candidatas por repo con su estado: *sin revisar*,
+   *commits nuevos*, *al día* o *borrador listo*.
+2. **Revisar** encola la PR; un único hilo las procesa de una en una (1–4 min cada una).
+   **Revisar pendientes** encola hasta `max_prs_per_run` de golpe.
+3. **Ver borrador** enseña cada comentario con el código señalado. Puedes editar el texto,
+   desmarcar los que no quieras publicar y tocar el resumen. **Guardar cambios** lo persiste.
+4. **Publicar** manda la review a GitHub (pide confirmación). **Descartar** no publica nada y
+   da la PR por revisada hasta ese commit, igual que si no hubiera habido hallazgos.
+
+Una PR con borrador pendiente para su commit actual no se vuelve a revisar (el servidor
+lo rechaza): primero publícalo o descártalo. «Revisar de nuevo» (PR completa) sí lo
+sobrescribe. Los trabajos en cola viven en memoria: reiniciar el servidor los pierde,
+aunque los borradores ya generados quedan en disco.
+
+Los borradores publicados o descartados se pueden seguir consultando en sólo lectura. La URL
+`#repo/número` abre un borrador directamente.
+
+Por defecto el servidor sólo escucha en `127.0.0.1`. Para entrar desde otro equipo de la
+red local: `python3 server.py --host 0.0.0.0` y abrir `http://<ip-del-mac>:8787/`
+(`ipconfig getifaddr en0`). No hay autenticación: cualquiera que llegue al puerto puede
+publicar reviews con tu cuenta, así que sólo en redes de confianza. Las llamadas a
+`gh pr list` se cachean 60 s; «Actualizar» fuerza la recarga.
+
+`./web.sh start` hace exactamente eso con `nohup`, guardando el pid en `state/server.pid`.
+
+## Decisiones de diseño
+
+| Decisión | Valor |
+|---|---|
+| Repos | gofre, tortilla (`config.json → repos`) |
+| Ejecución | a demanda desde la web local (`server.py`); no hay cron ni launchd |
+| Publicación | siempre manual, tras ver el borrador |
+| Identidad | usuario `anbillin` (gh ya autenticado) |
+| PRs elegibles | abiertas, no draft, autor ≠ yo, autor ∉ bots |
+| Re-revisión | sólo el delta de commits desde la última revisión; si hubo force-push, la PR entera |
+| Tipo de review | siempre `COMMENT`; nunca approve ni request-changes |
+| Sin hallazgos | se descarta el borrador y se anota en el estado local |
+| Topes | 3 PRs por «Revisar pendientes» · 3000 líneas cambiadas por PR · 12 comentarios por review |
+
+## Cómo sabe `claude` las normas de cada repo
+
+`claude -p` se ejecuta con el directorio de trabajo dentro de un clon dedicado del repo
+(`repos/<repo>`), con la rama de la PR checkouteada. Claude Code carga desde ahí
+`CLAUDE.md`, `AGENTS.md`, las reglas de `.claude/rules` (por `paths:`) y las skills del
+repo. El prompt (`prompts/review-pr.md`) además le obliga a leer `recetario.lock`, las
+reglas que casan con los ficheros del diff y las skills cuyo disparador casa con el
+cambio, y a atribuir cada hallazgo a la norma de la que sale.
+
+Los clones son independientes de tus copias de trabajo en `~/Documents/gofre` y
+`~/Documents/tortilla`: nunca se tocan.
+
+## Flujo de una revisión (`make_draft`)
+
+1. Busca el SHA de la última revisión: estado local `state/reviewed.json`, y si no, el
+   marcador oculto `<!-- uatu sha=… -->` de mis reviews en GitHub. Si el head no ha
+   cambiado, se omite.
+2. `git fetch` de base y head; checkout detached del head en `repos/<repo>`. Un lock por
+   repo (`state/<repo>.lock`) evita que dos revisiones del mismo repo se pisen el clon.
+3. Diff completo (merge-base..head) y diff a comentar (último SHA..head, o el completo).
+   Si el delta supera el tope de líneas, se omite.
+4. `claude -p` con el prompt renderizado, salida estructurada (`--json-schema`), sólo
+   herramientas de lectura y git read-only, sin MCP (`--strict-mcp-config`).
+5. Valida cada hallazgo contra las líneas comentables del diff (GitHub sólo acepta líneas
+   añadidas o de contexto; devuelve 422 fuera de ellas). Las que caen fuera se descartan o
+   se ajustan a la línea más cercana (±3).
+6. Guarda el borrador en `state/drafts/<repo>-<pr>.json` con el contexto de código de cada
+   comentario. **No toca el estado ni GitHub.**
+
+Publicar (`publish_draft`) construye la review `COMMENT` con los comentarios activos, el
+resumen y el marcador, la envía y anota el SHA en `state/reviewed.json`.
+
+## Línea de comandos
+
+```bash
+python3 uatu.py status                    # qué PRs hay y en qué estado están
+python3 uatu.py review gofre 1640         # genera el borrador y lo enseña por consola
+python3 uatu.py review gofre 1640 --full  # ignora revisiones previas (PR entera)
+python3 uatu.py publish gofre 1640        # publica un borrador existente
+python3 uatu.py run --repo tortilla --max 2   # borradores para las pendientes, sin publicar
+```
+
+La CLI y el servidor pueden convivir: comparten el lock por repo y el estado.
+
+Artefactos de cada revisión en `state/work/`: `<repo>-<pr>-full.diff`, `-delta.diff`,
+`-claude.json` (salida cruda) y `-payload.json` (lo último enviado a GitHub).
+Log en `logs/uatu.log` (las últimas líneas también en la web, botón «Log»).
+
+## Ajustes
+
+Todo en `config.json`. `claude.model` va fijado a `claude-fable-5-1`: en modo `-p`,
+Claude Code no respeta el `model` de `~/.claude/settings.json` y cae a Haiku si no se le
+pasa `--model` explícito (comprobado el 2026-11-04). `claude.max_budget_usd` sólo aplica
+si se factura por API.
+
+## Voz de los comentarios
+
+Los comentarios salen con la cuenta de `anbillin` y el prompt les da su voz: cortos, en
+plural inclusivo («¿no podríamos…?»), muchas veces como pregunta, tuteo relajado, sin
+cabeceras ni etiquetas de severidad, con un bloque de código cuando se propone código.
+La sección «Voz» de `prompts/review-pr.md` lleva ejemplos reales de reviews anteriores
+sacados de GitHub; si el tono se desvía, se ajusta ahí y se comprueba con un borrador.
+En la web, además, cada comentario se puede retocar antes de publicarlo.
+
+`severity` y `rule` siguen existiendo en la salida de `claude`, pero sólo para ordenar,
+recortar al tope y verlos en el borrador: no se publican.
+
+La review no lleva pie visible por defecto. Con `visible_signature` en `config.json`
+(p. ej. `"Revisado con UATU"`) se añade una línea al final del cuerpo de la review. El
+marcador HTML con el SHA revisado va siempre y es invisible en GitHub.

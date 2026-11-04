@@ -1,0 +1,21 @@
+{
+  "github_org": "BillinTeam",
+  "repos": [
+    "gofre",
+    "tortilla"
+  ],
+  "me": "anbillin",
+  "exclude_authors": [
+    "app/github-actions",
+    "dependabot[bot]"
+  ],
+  "visible_signature": null,
+  "max_prs_per_run": 3,
+  "max_changed_lines": 3000,
+  "max_findings": 12,
+  "claude": {
+    "model": "claude-fable-5-1",
+    "max_turns": 80,
+    "max_budget_usd": 4.0
+  }
+}

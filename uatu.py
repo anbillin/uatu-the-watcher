@@ -1,0 +1,622 @@
+#!/usr/bin/env python3
+"""UATU: revisa las PRs abiertas de los compañeros con `claude` y deja un
+BORRADOR de review por PR. Nada se publica en GitHub hasta que alguien lo
+ve y pulsa «Publicar» (web: `server.py`, o `uatu.py publish`).
+
+Uso:
+  server.py [--port 8787]                   # interfaz web (lo habitual)
+  uatu.py status                            # PRs candidatas y su estado
+  uatu.py review <repo> <pr> [--full] [--publish]
+  uatu.py run [--repo gofre] [--max N]      # borradores para las pendientes
+  uatu.py publish <repo> <pr>               # publica un borrador existente
+"""
+import argparse
+import collections
+import datetime as dt
+import fcntl
+import json
+import re
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+CONFIG = json.loads((ROOT / "config.json").read_text())
+REPOS_DIR = ROOT / "repos"
+STATE_DIR = ROOT / "state"
+WORK_DIR = STATE_DIR / "work"
+DRAFTS_DIR = STATE_DIR / "drafts"
+LOGS_DIR = ROOT / "logs"
+STATE_FILE = STATE_DIR / "reviewed.json"
+PROMPT_FILE = ROOT / "prompts" / "review-pr.md"
+
+MARKER_RE = re.compile(r"<!-- uatu sha=([0-9a-f]{7,40}) -->")
+ORG = CONFIG["github_org"]
+ME = CONFIG["me"]
+SEVERITY_ORDER = {"must": 0, "should": 1, "nit": 2}
+
+# Últimas líneas de log, para enseñarlas en la web.
+LOG_BUFFER = collections.deque(maxlen=400)
+STATE_LOCK = threading.RLock()
+
+FINDINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "start_line": {"type": "integer"},
+                    "line": {"type": "integer"},
+                    "severity": {"type": "string", "enum": ["must", "should", "nit"]},
+                    "rule": {"type": "string"},
+                    "body": {"type": "string"},
+                },
+                "required": ["path", "start_line", "line", "severity", "rule", "body"],
+            },
+        },
+    },
+    "required": ["summary", "findings"],
+}
+
+
+class Skip(Exception):
+    """La PR no se revisa esta vez; el mensaje dice por qué."""
+
+
+# ----------------------------------------------------------------- utilidades
+
+def now() -> str:
+    return dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def log(msg: str) -> None:
+    line = f"[{now()}] {msg}"
+    print(line, flush=True)
+    LOG_BUFFER.append(line)
+    LOGS_DIR.mkdir(exist_ok=True)
+    with open(LOGS_DIR / "uatu.log", "a") as fh:
+        fh.write(line + "\n")
+
+
+def sh(cmd, cwd=None, check=True, input_text=None) -> str:
+    res = subprocess.run(
+        cmd, cwd=cwd, text=True, capture_output=True, input=input_text
+    )
+    if check and res.returncode != 0:
+        raise RuntimeError(
+            f"command failed ({res.returncode}): {' '.join(cmd)}\n{res.stderr.strip()}"
+        )
+    return res.stdout
+
+
+def gh_json(args, repo=None):
+    cmd = ["gh"] + args
+    if repo:
+        cmd += ["-R", f"{ORG}/{repo}"]
+    return json.loads(sh(cmd) or "null")
+
+
+def load_state() -> dict:
+    with STATE_LOCK:
+        if STATE_FILE.exists():
+            return json.loads(STATE_FILE.read_text())
+        return {}
+
+
+def update_state(key: str, entry: dict) -> None:
+    with STATE_LOCK:
+        state = load_state()
+        state[key] = entry
+        STATE_DIR.mkdir(exist_ok=True)
+        STATE_FILE.write_text(json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True))
+
+
+def state_key(repo: str, number: int) -> str:
+    return f"{repo}#{number}"
+
+
+# ----------------------------------------------------------------- borradores
+
+def draft_path(repo: str, number: int) -> Path:
+    return DRAFTS_DIR / f"{repo}-{number}.json"
+
+
+def load_draft(repo: str, number: int):
+    p = draft_path(repo, number)
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+def save_draft(draft: dict) -> None:
+    DRAFTS_DIR.mkdir(parents=True, exist_ok=True)
+    draft_path(draft["repo"], draft["number"]).write_text(
+        json.dumps(draft, indent=2, ensure_ascii=False))
+
+
+def enabled_comments(draft: dict) -> list:
+    return [c for c in draft["comments"] if c.get("enabled", True) and c["body"].strip()]
+
+
+def draft_summary(draft: dict, head: str) -> dict:
+    """Lo que la lista de PRs necesita saber de un borrador."""
+    return {
+        "status": draft["status"],
+        "comments": len(enabled_comments(draft)),
+        "total": len(draft["comments"]),
+        "created_at": draft["created_at"],
+        "published_at": draft.get("published_at"),
+        "mode": draft["mode"],
+        "stale": draft["head"] != head,
+        "cost_usd": draft.get("claude", {}).get("cost_usd"),
+    }
+
+
+# ----------------------------------------------------------------- GitHub
+
+PR_FIELDS = "number,title,body,author,isDraft,headRefName,headRefOid,baseRefName,url,updatedAt,additions,deletions"
+
+
+def list_candidates(repo: str) -> list:
+    prs = gh_json(
+        ["pr", "list", "--state", "open", "--limit", "100", "--json", PR_FIELDS], repo
+    )
+    excluded = set(CONFIG.get("exclude_authors", [])) | {ME}
+    out = []
+    for pr in prs:
+        if pr["isDraft"]:
+            continue
+        if pr["author"]["login"] in excluded:
+            continue
+        pr["repo"] = repo
+        out.append(pr)
+    out.sort(key=lambda p: p["updatedAt"], reverse=True)
+    return out
+
+
+def get_pr(repo: str, number: int) -> dict:
+    pr = gh_json(["pr", "view", str(number), "--json", PR_FIELDS], repo)
+    pr["repo"] = repo
+    return pr
+
+
+def last_reviewed_sha(repo: str, number: int, state: dict):
+    """SHA de la última revisión nuestra: primero el estado local, si no, el
+    marcador oculto en las reviews publicadas en GitHub."""
+    entry = state.get(state_key(repo, number))
+    if entry:
+        return entry["sha"]
+    bodies = gh_json(
+        ["api", f"repos/{ORG}/{repo}/pulls/{number}/reviews", "--paginate",
+         "--jq", f'[.[] | select(.user.login=="{ME}") | .body]'],
+    ) or []
+    shas = [m.group(1) for b in bodies for m in [MARKER_RE.search(b or "")] if m]
+    return shas[-1] if shas else None
+
+
+def overview() -> list:
+    """Todas las PRs candidatas con su estado local, borrador incluido."""
+    state = load_state()
+    rows = []
+    for repo in CONFIG["repos"]:
+        for pr in list_candidates(repo):
+            key = state_key(repo, pr["number"])
+            entry = state.get(key)
+            if entry and entry["sha"] == pr["headRefOid"]:
+                status = "al-dia"
+            elif entry:
+                status = "nuevos-commits"
+            else:
+                status = "pendiente"
+            draft = load_draft(repo, pr["number"])
+            rows.append({
+                "key": key, "repo": repo, "number": pr["number"], "title": pr["title"],
+                "author": pr["author"]["login"], "url": pr["url"], "head": pr["headRefOid"],
+                "head_ref": pr["headRefName"], "base_ref": pr["baseRefName"],
+                "updated_at": pr["updatedAt"], "additions": pr["additions"],
+                "deletions": pr["deletions"], "status": status, "last": entry,
+                "draft": draft_summary(draft, pr["headRefOid"]) if draft else None,
+            })
+    return rows
+
+
+# ----------------------------------------------------------------- git
+
+def ensure_clone(repo: str) -> Path:
+    path = REPOS_DIR / repo
+    if not path.exists():
+        REPOS_DIR.mkdir(exist_ok=True)
+        log(f"clonando {ORG}/{repo} en {path}")
+        sh(["git", "clone", "--quiet", f"git@github.com:{ORG}/{repo}.git", str(path)])
+    return path
+
+
+def prepare_checkout(path: Path, pr: dict) -> str:
+    """Trae base y head, deja el repo en el head (detached) y devuelve el merge-base."""
+    number = pr["number"]
+    sh(["git", "fetch", "--quiet", "--force", "origin",
+        f"pull/{number}/head:refs/uatu/pr-{number}",
+        f"+refs/heads/{pr['baseRefName']}:refs/remotes/origin/{pr['baseRefName']}"], cwd=path)
+    sh(["git", "reset", "--quiet", "--hard"], cwd=path)
+    sh(["git", "clean", "--quiet", "-fdx", "-e", ".claude/settings.local.json"], cwd=path)
+    sh(["git", "checkout", "--quiet", "--detach", pr["headRefOid"]], cwd=path)
+    return sh(["git", "merge-base", f"origin/{pr['baseRefName']}", pr["headRefOid"]],
+              cwd=path).strip()
+
+
+def is_ancestor(path: Path, older: str, newer: str) -> bool:
+    res = subprocess.run(["git", "merge-base", "--is-ancestor", older, newer],
+                         cwd=path, capture_output=True)
+    return res.returncode == 0
+
+
+def git_diff(path: Path, a: str, b: str) -> str:
+    return sh(["git", "diff", "--no-color", "--no-ext-diff", "-U3", f"{a}..{b}"], cwd=path)
+
+
+def count_changed_lines(diff: str) -> int:
+    return sum(1 for ln in diff.splitlines()
+               if (ln.startswith("+") or ln.startswith("-"))
+               and not ln.startswith("+++") and not ln.startswith("---"))
+
+
+def commentable_lines(diff: str) -> dict:
+    """Para cada fichero del diff, el conjunto de líneas del lado NUEVO en las
+    que GitHub admite un comentario (añadidas y de contexto)."""
+    files, current, new_ln = {}, None, 0
+    hunk_re = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+    for ln in diff.splitlines():
+        if ln.startswith("+++ "):
+            target = ln[4:].strip()
+            current = None if target == "/dev/null" else target[2:] if target.startswith("b/") else target
+            if current is not None:
+                files.setdefault(current, set())
+            continue
+        if ln.startswith("--- ") or ln.startswith("diff --git") or current is None:
+            continue
+        m = hunk_re.match(ln)
+        if m:
+            new_ln = int(m.group(1))
+            continue
+        if ln.startswith("\\"):
+            continue
+        if ln.startswith("+") or ln.startswith(" ") or ln == "":
+            files[current].add(new_ln)
+            new_ln += 1
+        # las líneas '-' no avanzan el contador del lado nuevo
+    return files
+
+
+def code_context(repo_path: Path, path: str, start: int, end: int, around: int = 3) -> list:
+    """Líneas del fichero alrededor del rango comentado, para verlas en la web
+    sin depender de en qué commit esté el clon después."""
+    try:
+        lines = (repo_path / path).read_text(errors="replace").splitlines()
+    except OSError:
+        return []
+    a, b = max(1, start - around), min(len(lines), end + around)
+    return [{"n": n, "text": lines[n - 1], "hit": start <= n <= end} for n in range(a, b + 1)]
+
+
+# ----------------------------------------------------------------- claude
+
+def render_prompt(pr: dict, head: str, diff_file: Path, delta_file: Path, mode: str, last_sha):
+    if mode == "full":
+        mode_expl = "Es la PR completa: primera revisión."
+    else:
+        mode_expl = (f"Son sólo los commits desde la última revisión (`{last_sha[:10]}..{head[:10]}`). "
+                     "Lo anterior ya se comentó: no lo repitas, aunque sigas viéndolo en el diff completo.")
+    body = (pr.get("body") or "").strip() or "(sin descripción)"
+    repl = {
+        "{{REPO}}": pr["repo"], "{{PR_NUMBER}}": str(pr["number"]), "{{PR_TITLE}}": pr["title"],
+        "{{AUTHOR}}": pr["author"]["login"], "{{HEAD_REF}}": pr["headRefName"],
+        "{{BASE_REF}}": pr["baseRefName"], "{{HEAD_SHA}}": head, "{{PR_BODY}}": body,
+        "{{DIFF_FILE}}": str(diff_file), "{{DELTA_FILE}}": str(delta_file),
+        "{{MODE_EXPLANATION}}": mode_expl, "{{MAX_FINDINGS}}": str(CONFIG["max_findings"]),
+    }
+    text = PROMPT_FILE.read_text()
+    for k, v in repl.items():
+        text = text.replace(k, v)
+    return text
+
+
+def run_claude(repo_path: Path, prompt: str, pr: dict):
+    """Devuelve (salida estructurada, metadatos de la ejecución)."""
+    ccfg = CONFIG["claude"]
+    cmd = [
+        "claude", "-p", prompt,
+        "--output-format", "json",
+        "--json-schema", json.dumps(FINDINGS_SCHEMA),
+        "--permission-mode", "dontAsk",
+        "--allowedTools", "Read", "Grep", "Glob",
+        "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git blame:*)",
+        "Bash(ls:*)", "Bash(cat:*)", "Bash(wc:*)",
+        "--disallowedTools", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "Agent",
+        "--add-dir", str(WORK_DIR),
+        "--strict-mcp-config",
+        "--no-session-persistence",
+        "--max-turns", str(ccfg["max_turns"]),
+        "--max-budget-usd", str(ccfg["max_budget_usd"]),
+    ]
+    if ccfg.get("model"):
+        cmd += ["--model", ccfg["model"]]
+    log(f"  claude revisando {pr['repo']}#{pr['number']} ...")
+    res = subprocess.run(cmd, cwd=repo_path, text=True, capture_output=True)
+    raw_path = WORK_DIR / f"{pr['repo']}-{pr['number']}-claude.json"
+    raw_path.write_text(res.stdout)
+    if res.returncode != 0:
+        raise RuntimeError(f"claude salió con {res.returncode}: {res.stderr.strip()[:2000]}")
+    data = json.loads(res.stdout)
+    if data.get("is_error"):
+        raise RuntimeError(f"claude devolvió error: {data.get('result')}")
+    out = data.get("structured_output")
+    if out is None:
+        out = json.loads(data.get("result") or "{}")
+    meta = {
+        "turns": data.get("num_turns"),
+        "cost_usd": round(data.get("total_cost_usd", 0) or 0, 2),
+        "raw_findings": len(out.get("findings", [])),
+        "model": ccfg.get("model"),
+    }
+    log(f"  claude terminó: {meta['raw_findings']} hallazgos brutos, "
+        f"{meta['turns']} turnos, {meta['cost_usd']:.2f} USD")
+    return out, meta
+
+
+# ----------------------------------------------------------------- hallazgos
+
+def validate_findings(findings: list, commentable: dict) -> list:
+    valid = []
+    for f in findings:
+        path = f["path"]
+        lines = commentable.get(path)
+        if not lines:
+            log(f"  descartado: {path} no está en el diff a comentar")
+            continue
+        line, start = int(f["line"]), int(f["start_line"])
+        if line not in lines:
+            near = [l for l in lines if abs(l - line) <= 3]
+            if not near:
+                log(f"  descartado: {path}:{line} fuera del diff")
+                continue
+            line = min(near, key=lambda l: abs(l - line))
+        if start >= line or any(l not in lines for l in range(start, line)):
+            start = line
+        valid.append({**f, "line": line, "start_line": start})
+    valid.sort(key=lambda f: (SEVERITY_ORDER.get(f["severity"], 9), f["path"], f["line"]))
+    return valid[: CONFIG["max_findings"]]
+
+
+def build_payload(draft: dict) -> dict:
+    """Lo que se manda a GitHub, a partir del borrador (ya editado o no)."""
+    comments = []
+    for c in enabled_comments(draft):
+        item = {"path": c["path"], "line": c["line"], "side": "RIGHT", "body": c["body"].strip()}
+        if c["start_line"] < c["line"]:
+            item["start_line"] = c["start_line"]
+            item["start_side"] = "RIGHT"
+        comments.append(item)
+    body = (draft.get("summary") or "").strip()
+    if CONFIG.get("visible_signature"):
+        scope = ("PR completa" if draft["mode"] == "full"
+                 else f"commits `{draft['last_sha'][:10]}..{draft['head'][:10]}`")
+        body += f"\n\n_{CONFIG['visible_signature']} · {scope}_"
+    # El marcador es invisible en GitHub y es lo que permite saber hasta qué commit se revisó.
+    body = (body + "\n" if body else "") + f"<!-- uatu sha={draft['head']} -->"
+    return {"commit_id": draft["head"], "event": "COMMENT", "body": body, "comments": comments}
+
+
+def print_draft(draft: dict) -> None:
+    """Enseña un borrador por consola, con el código señalado."""
+    sep = "=" * 72
+    print(f"\n{sep}\n{draft['repo']}#{draft['number']} · {draft['title']}\n{draft['url']}\n{sep}")
+    if draft.get("summary"):
+        print(f"\nRESUMEN\n{draft['summary']}")
+    for c in enabled_comments(draft):
+        start, end = c["start_line"], c["line"]
+        rng = f"{start}-{end}" if start != end else str(end)
+        print(f"\n{c['path']}:{rng}")
+        print("```")
+        for row in c.get("context") or [{"n": 0, "text": "(sin contexto)", "hit": False}]:
+            mark = ">" if row["hit"] else " "
+            print(f"{mark}{row['n']:>5}  {row['text']}")
+        print("```")
+        print(f"====\n{c['body'].strip()}\n====")
+    print(f"\n{len(enabled_comments(draft))} comentarios · borrador {draft['status']}\n")
+
+
+def post_review(repo: str, number: int, payload: dict) -> None:
+    sh(["gh", "api", "-X", "POST", f"repos/{ORG}/{repo}/pulls/{number}/reviews",
+        "--input", "-"], input_text=json.dumps(payload))
+
+
+# ----------------------------------------------------------------- flujo por PR
+
+def make_draft(pr: dict, force_full: bool = False) -> dict:
+    """Revisa la PR con claude y guarda el borrador. No publica ni toca el estado."""
+    repo, number, head = pr["repo"], pr["number"], pr["headRefOid"]
+    key = state_key(repo, number)
+    last_sha = None if force_full else last_reviewed_sha(repo, number, load_state())
+    if last_sha == head:
+        raise Skip(f"sin cambios desde la última revisión ({head[:10]})")
+
+    STATE_DIR.mkdir(exist_ok=True)
+    # Un clon por repo: dos revisiones del mismo repo no pueden solaparse.
+    with open(STATE_DIR / f"{repo}.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        repo_path = ensure_clone(repo)
+        merge_base = prepare_checkout(repo_path, pr)
+        full_diff = git_diff(repo_path, merge_base, head)
+
+        mode = "full"
+        if last_sha and is_ancestor(repo_path, last_sha, head):
+            mode, delta_diff = "delta", git_diff(repo_path, last_sha, head)
+        else:
+            if last_sha:
+                log(f"{key}: la rama se reescribió (force-push), revisión completa")
+            delta_diff = full_diff
+
+        changed = count_changed_lines(delta_diff)
+        if changed > CONFIG["max_changed_lines"]:
+            raise Skip(f"{changed} líneas cambiadas > tope {CONFIG['max_changed_lines']}")
+
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        diff_file = WORK_DIR / f"{repo}-{number}-full.diff"
+        delta_file = WORK_DIR / f"{repo}-{number}-delta.diff"
+        diff_file.write_text(full_diff)
+        delta_file.write_text(delta_diff)
+
+        log(f"{key}: revisión {mode}, {changed} líneas, '{pr['title']}' por {pr['author']['login']}")
+        prompt = render_prompt(pr, head, diff_file, delta_file, mode, last_sha)
+        result, meta = run_claude(repo_path, prompt, pr)
+
+        # Los comentarios sólo pueden caer en líneas del diff de la PR; en delta,
+        # además, sólo en las del delta.
+        findings = validate_findings(result.get("findings", []), commentable_lines(delta_diff))
+        comments = [{
+            "path": f["path"], "start_line": f["start_line"], "line": f["line"],
+            "severity": f["severity"], "rule": f["rule"], "body": f["body"].strip(),
+            "enabled": True,
+            "context": code_context(repo_path, f["path"], f["start_line"], f["line"]),
+        } for f in findings]
+
+    draft = {
+        "repo": repo, "number": number, "title": pr["title"], "author": pr["author"]["login"],
+        "url": pr["url"], "head": head, "head_ref": pr["headRefName"], "base_ref": pr["baseRefName"],
+        "mode": mode, "last_sha": last_sha, "lines_changed": changed,
+        "created_at": now(), "status": "pending",
+        "summary": (result.get("summary") or "").strip(),
+        "comments": comments, "claude": meta,
+    }
+    save_draft(draft)
+    log(f"{key}: borrador listo con {len(comments)} comentarios (sin publicar)")
+    return draft
+
+
+def publish_draft(draft: dict) -> dict:
+    """Publica el borrador tal como está (con las ediciones) y marca la PR como revisada."""
+    if draft["status"] != "pending":
+        raise ValueError(f"el borrador ya está {draft['status']}")
+    payload = build_payload(draft)
+    if not payload["comments"] and not (draft.get("summary") or "").strip():
+        raise ValueError("no hay nada que publicar: descarta el borrador o deja algún comentario")
+    key = state_key(draft["repo"], draft["number"])
+    WORK_DIR.mkdir(parents=True, exist_ok=True)
+    (WORK_DIR / f"{draft['repo']}-{draft['number']}-payload.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False))
+    post_review(draft["repo"], draft["number"], payload)
+    n = len(payload["comments"])
+    update_state(key, {"sha": draft["head"], "at": now(), "status": "reviewed",
+                       "findings": n, "mode": draft["mode"]})
+    draft.update({"status": "published", "published_at": now(), "published_comments": n})
+    save_draft(draft)
+    log(f"{key}: publicados {n} comentarios en {draft['url']}")
+    return draft
+
+
+def discard_draft(draft: dict) -> dict:
+    """No publica nada y da la PR por revisada hasta el commit del borrador."""
+    if draft["status"] != "pending":
+        raise ValueError(f"el borrador ya está {draft['status']}")
+    key = state_key(draft["repo"], draft["number"])
+    update_state(key, {"sha": draft["head"], "at": now(), "status": "discarded",
+                       "findings": 0, "mode": draft["mode"]})
+    draft.update({"status": "discarded", "discarded_at": now()})
+    save_draft(draft)
+    log(f"{key}: borrador descartado, nada publicado")
+    return draft
+
+
+def pending_rows(rows: list) -> list:
+    """PRs que necesitan revisión y no tienen ya un borrador pendiente para su head."""
+    out = []
+    for r in rows:
+        if r["status"] == "al-dia":
+            continue
+        d = r["draft"]
+        if d and d["status"] == "pending" and not d["stale"]:
+            continue
+        out.append(r)
+    return out
+
+
+# ----------------------------------------------------------------- comandos
+
+def cmd_run(args) -> None:
+    rows = overview()
+    if args.repo:
+        rows = [r for r in rows if r["repo"] == args.repo]
+    todo = pending_rows(rows)
+    budget = args.max or CONFIG["max_prs_per_run"]
+    log(f"run: {len(rows)} candidatas, {len(todo)} por revisar; tope {budget}")
+    done = 0
+    for r in todo[:budget]:
+        try:
+            make_draft(get_pr(r["repo"], r["number"]))
+            done += 1
+        except Skip as skip:
+            log(f"{r['key']}: se salta, {skip}")
+        except Exception as exc:  # una PR rota no para el resto
+            log(f"{r['key']}: ERROR {exc}")
+    log(f"run terminado: {done} borradores nuevos. Revísalos en la web o con `publish`")
+
+
+def cmd_review(args) -> None:
+    try:
+        draft = make_draft(get_pr(args.repo, args.pr), force_full=args.full)
+    except Skip as skip:
+        log(f"{args.repo}#{args.pr}: se salta, {skip}")
+        return
+    print_draft(draft)
+    if args.publish:
+        publish_draft(draft)
+
+
+def cmd_publish(args) -> None:
+    draft = load_draft(args.repo, args.pr)
+    if not draft:
+        sys.exit(f"no hay borrador para {args.repo}#{args.pr}")
+    print_draft(draft)
+    publish_draft(draft)
+
+
+def cmd_status(args) -> None:
+    labels = {"al-dia": "al día", "nuevos-commits": "nuevos commits", "pendiente": "pendiente"}
+    for r in overview():
+        st = labels[r["status"]]
+        if r["last"] and r["status"] == "al-dia":
+            st += f" ({r['last']['status']})"
+        d = r["draft"]
+        if d and d["status"] == "pending":
+            st += f" · borrador {d['comments']} com." + (" OBSOLETO" if d["stale"] else "")
+        print(f"{r['key']:<16} {st:<36} {r['author']:<24} {r['title'][:60]}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("run", help="genera borradores para las PRs pendientes")
+    p.add_argument("--repo", help="limita a un repo")
+    p.add_argument("--max", type=int, help="tope de PRs en esta ejecución")
+    p.set_defaults(fn=cmd_run)
+    p = sub.add_parser("review", help="revisa una PR concreta y deja el borrador")
+    p.add_argument("repo")
+    p.add_argument("pr", type=int)
+    p.add_argument("--full", action="store_true", help="ignora la revisión anterior y revisa toda la PR")
+    p.add_argument("--publish", action="store_true", help="publica el borrador sin pasar por la web")
+    p.set_defaults(fn=cmd_review)
+    p = sub.add_parser("publish", help="publica un borrador existente")
+    p.add_argument("repo")
+    p.add_argument("pr", type=int)
+    p.set_defaults(fn=cmd_publish)
+    p = sub.add_parser("status", help="muestra el estado de cada PR candidata")
+    p.set_defaults(fn=cmd_status)
+    args = ap.parse_args()
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    main()
