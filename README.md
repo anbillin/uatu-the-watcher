@@ -59,9 +59,11 @@ La lista lee de GitHub, en una consulta GraphQL por repo, dos cosas más por PR:
 
 El botón **Aprobar** (en la lista y al pie de la conversación, con un mensaje opcional) manda una
 review `APPROVE` sobre el commit actual, y es la única review que UATU envía que no es `COMMENT`.
-Sólo aparece si UATU ya revisó ese commit (estado *al día*, publicado o descartado), no hay un
+Aparece si UATU ya revisó ese commit (estado *al día*, publicado o descartado), no hay un
 borrador pendiente para él y no está ya aprobada; el servidor vuelve a comprobarlo antes de enviar.
-Con commits sin revisar, primero «Revisar delta».
+Con commits sin revisar hay dos casos: si nadie ha contestado a mis comentarios, primero «Revisar
+delta»; si hay respuestas, se puede aprobar igualmente (las respuestas bastan para decidir) y la
+web avisa de que el commit aprobado no lo ha revisado UATU.
 
 Por defecto el servidor sólo escucha en `127.0.0.1`. Para entrar desde otro equipo de la
 red local: `python3 server.py --host 0.0.0.0` y abrir `http://<ip-del-mac>:8787/`

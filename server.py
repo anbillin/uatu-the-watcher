@@ -274,7 +274,8 @@ class Handler(BaseHTTPRequestHandler):
         return conv
 
     def post_approve(self, repo, number):
-        """Review APPROVE sobre el commit actual. Sólo si UATU ya revisó ese commit."""
+        """Review APPROVE sobre el commit actual. Sólo si UATU ya revisó ese commit o hay
+        respuestas a mis comentarios (uatu.can_approve decide)."""
         if repo not in uatu.CONFIG["repos"]:
             raise ApiError(400, "repo inválido")
         body = self.read_body()

@@ -271,7 +271,7 @@ def overview() -> list:
                 "draft": draft_summary(draft, pr["headRefOid"]) if draft else None,
                 "approval": conv["approval"] if conv else None,
                 "conversation": conversation_summary(conv, key, seen) if conv else None,
-                "can_approve": can_approve(pr, entry, conv["approval"])[0] if conv else False,
+                "can_approve": can_approve(pr, entry, conv)[0] if conv else False,
             })
     return rows
 
@@ -377,7 +377,7 @@ def get_conversation(repo: str, number: int) -> dict:
     conv = fetch_conversations(repo, [number]).get(number) or {"approval": None, "threads": []}
     key = state_key(repo, number)
     entry = load_state().get(key)
-    can, why = can_approve(pr, entry, conv["approval"])
+    can, why = can_approve(pr, entry, conv)
     seen_until = load_seen().get(key)
     summary = conversation_summary(conv, key, load_seen())
     mark_seen(key, summary["last_reply_at"])
@@ -390,14 +390,21 @@ def get_conversation(repo: str, number: int) -> dict:
     }
 
 
-def can_approve(pr: dict, entry, approval):
-    """Sólo se aprueba lo que ya se ha revisado hasta su commit actual y no está aprobado."""
-    if approval:
+def has_replies(conv: dict) -> bool:
+    """Alguien que no soy yo ha contestado en alguno de mis hilos."""
+    return any(r["author"] != ME for t in conv.get("threads", []) for r in t["replies"])
+
+
+def can_approve(pr: dict, entry, conv: dict):
+    """Se aprueba lo que UATU ya revisó hasta su commit actual y no está aprobado. Si han
+    contestado a mis comentarios, también con commits posteriores sin revisar: las respuestas
+    bastan para decidir, y el APPROVE sale igualmente sobre el commit actual."""
+    if conv["approval"]:
         return False, "ya está aprobada"
     if not entry:
         return False, "UATU no ha revisado esta PR"
-    if entry["sha"] != pr["headRefOid"]:
-        return False, "hay commits sin revisar: revisa el delta antes de aprobar"
+    if entry["sha"] != pr["headRefOid"] and not has_replies(conv):
+        return False, "hay commits sin revisar y nadie ha contestado: revisa el delta antes de aprobar"
     draft = load_draft(pr["repo"], pr["number"])
     if draft and draft["status"] == "pending" and draft["head"] == pr["headRefOid"]:
         return False, "hay un borrador pendiente para este commit: publícalo o descártalo"
@@ -409,14 +416,16 @@ def approve_pr(repo: str, number: int, message: str = "") -> dict:
     y siempre la pide una persona desde la web o la CLI."""
     pr = get_pr(repo, number)
     key = state_key(repo, number)
-    conv = fetch_conversations(repo, [number]).get(number) or {"approval": None}
-    ok, why = can_approve(pr, load_state().get(key), conv["approval"])
+    conv = fetch_conversations(repo, [number]).get(number) or {"approval": None, "threads": []}
+    ok, why = can_approve(pr, load_state().get(key), conv)
     if not ok:
         raise ValueError(why)
     payload = {"commit_id": pr["headRefOid"], "event": "APPROVE", "body": (message or "").strip()}
     sh(["gh", "api", "-X", "POST", f"repos/{ORG}/{repo}/pulls/{number}/reviews", "--input", "-"],
        input_text=json.dumps(payload))
-    log(f"{key}: aprobada en {pr['headRefOid'][:10]}{' con mensaje' if payload['body'] else ''} · {pr['url']}")
+    entry = load_state().get(key)
+    unreviewed = " (commits sin revisar por UATU)" if entry and entry["sha"] != pr["headRefOid"] else ""
+    log(f"{key}: aprobada en {pr['headRefOid'][:10]}{unreviewed}{' con mensaje' if payload['body'] else ''} · {pr['url']}")
     return {"key": key, "sha": pr["headRefOid"], "at": now()}
 
 
@@ -901,7 +910,7 @@ def main() -> None:
     p.add_argument("repo")
     p.add_argument("pr", type=int)
     p.set_defaults(fn=cmd_publish)
-    p = sub.add_parser("approve", help="aprueba una PR ya revisada hasta su commit actual")
+    p = sub.add_parser("approve", help="aprueba una PR revisada hasta su commit actual, o con respuestas a mis comentarios")
     p.add_argument("repo")
     p.add_argument("pr", type=int)
     p.add_argument("-m", "--message", help="cuerpo opcional de la review de aprobación")

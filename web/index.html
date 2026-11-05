@@ -126,9 +126,12 @@
   td.num { font-family: var(--mono); white-space: nowrap; }
   td .title { font-weight: 500; }
   td .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
-  td.actions { white-space: nowrap; text-align: right; }
-  td.actions button + button { margin-left: 6px; }
-  td.actions button.link + button.link { margin-left: 10px; }
+  td.actions { white-space: nowrap; }
+  /* set de botones vertical: todos del mismo ancho, los enlaces debajo */
+  .btnset { display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: 100%; }
+  .btnset button { width: 100%; text-align: center; }
+  .btnset button.link { width: auto; align-self: flex-start; font-size: 12px; }
+  .btnset button:not(.link) + button.link { margin-top: 2px; }
   .msg { color: var(--muted); font-size: 12px; margin-top: 4px; max-width: 420px; white-space: normal; }
   .msg.bad { color: var(--bad); }
   .empty { padding: 26px; color: var(--muted); text-align: center; background: var(--card); border: 1px dashed var(--line); border-radius: 12px; }
@@ -219,9 +222,9 @@
     td.num + td { display: inline; }
     td.num + td .title { display: inline; }
     td .meta { display: block; margin: 4px 0 8px; line-height: 1.5; }
-    td.actions { text-align: left; margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    td.actions button { flex: 1 1 auto; }
-    td.actions button + button { margin-left: 0; }
+    td.actions { margin-top: 8px; }
+    .btnset { gap: 8px; }
+    .btnset button.link { min-height: 0; }
     .msg { max-width: none; }
     td .meta, td .meta code, .draft-head .meta, .draft-head .meta code { overflow-wrap: anywhere; }
     td .title { overflow-wrap: anywhere; }
@@ -281,7 +284,7 @@
 
 <script>
 const S = { prs: [], jobs: {}, config: {}, generatedAt: null, error: null,
-            view: 'list', draft: null, conv: null, showLog: false, logLines: [], timer: null };
+            view: 'list', draft: null, conv: null, showLog: false, showApproved: false, logLines: [], timer: null };
 
 // ------------------------------------------------------------ util
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -371,10 +374,14 @@ async function openConversation(repo, number) {
     refresh(false);  // al verlas dejan de ser «nuevas» en la lista
   } catch (e) { toast(e.message, true); }
 }
+// Hay commits en la PR posteriores a la última revisión de UATU.
+function unreviewedCommits(pr) { return !!(pr && pr.last && pr.last.sha !== pr.head); }
 async function approve(repo, number, fromConv) {
   const msgEl = fromConv ? document.getElementById('approve-msg') : null;
   const message = msgEl ? msgEl.value.trim() : '';
-  if (!confirm(`Aprobar ${repo}#${number} como ${S.config.me}?${message ? `\n\nMensaje: ${message}` : ''}\n\nSale como review APPROVE sobre el commit actual.`)) return;
+  const pr = fromConv ? S.conv : S.prs.find(p => p.repo === repo && p.number === number);
+  const warn = unreviewedCommits(pr) ? '\n\nOJO: hay commits que UATU no ha revisado; apruebas fiándote de las respuestas.' : '';
+  if (!confirm(`Aprobar ${repo}#${number} como ${S.config.me}?${message ? `\n\nMensaje: ${message}` : ''}\n\nSale como review APPROVE sobre el commit actual.${warn}`)) return;
   try {
     await api('POST', `/api/prs/${repo}/${number}/approve`, { message });
     toast(`${repo}#${number} aprobada`);
@@ -490,27 +497,40 @@ function actionsCell(pr) {
   const r = `'${pr.repo}', ${pr.number}`;
   const out = [];
   if (d && d.status === 'pending') out.push(`<button class="primary" onclick="openDraft(${r})">Ver borrador</button>`);
-  if (busy) { out.push(`<button disabled>Revisando…</button>`); return out.join(''); }
+  if (busy) { out.push(`<button disabled>Revisando…</button>`); return btnset(out); }
   if (pr.status === 'al-dia' && !(d && d.status === 'pending'))
     out.push(`<button onclick="review(${r}, true)" title="Ignora la revisión anterior y revisa toda la PR">Revisar de nuevo</button>`);
   else if (pr.status === 'nuevos-commits' || (d && d.stale))
     out.push(`<button onclick="review(${r}, false)" title="Sólo los commits nuevos">Revisar delta</button>`);
   else if (!(d && d.status === 'pending'))
     out.push(`<button class="primary" onclick="review(${r}, false)">Revisar</button>`);
-  // Aprobar sólo aparece cuando UATU ya revisó el commit actual y no está aprobada.
-  if (pr.can_approve) out.push(`<button class="ok" onclick="approve(${r})" title="Review APPROVE sobre el commit actual">Aprobar</button>`);
+  // Aprobar aparece cuando UATU ya revisó el commit actual, o cuando han contestado a mis
+  // comentarios aunque haya commits posteriores sin revisar; nunca si ya está aprobada.
+  if (pr.can_approve) out.push(`<button class="ok" onclick="approve(${r})" title="${unreviewedCommits(pr) ? 'Review APPROVE sobre el commit actual, que UATU no ha revisado: te fías de las respuestas' : 'Review APPROVE sobre el commit actual'}">Aprobar</button>`);
   if (pr.conversation && pr.conversation.threads)
     out.push(`<button class="link" onclick="openConversation(${r})">${pr.conversation.replies ? 'respuestas' : 'hilos'}</button>`);
   if (d && d.status !== 'pending') out.push(`<button class="link" onclick="openDraft(${r})">ver ${d.status === 'published' ? 'publicado' : 'descartado'}</button>`);
-  return out.join('');
+  return btnset(out);
 }
+function btnset(buttons) { return buttons.length ? `<div class="btnset">${buttons.join('')}</div>` : ''; }
+// Una PR aprobada está terminada para UATU: fuera de la lista salvo que hayan entrado commits
+// después del approve (ahí sí hay algo que mirar) o que el usuario pida verlas.
+function isDone(pr) { const a = pr.approval; return !!a && !(a.sha && a.sha !== pr.head); }
+function toggleApproved() { S.showApproved = !S.showApproved; render(true); }
 function renderList() {
   if (S.error) return `<div class="empty">No se pudo cargar la lista de PRs.<br><code>${esc(S.error)}</code><br><br><button onclick="refresh(true)">Reintentar</button></div>`;
   if (!S.prs.length && !S.generatedAt) return `<div class="empty">Observando el multiverso…</div>`;
   const repos = S.config.repos || [];
+  const hidden = S.showApproved ? [] : S.prs.filter(isDone);
+  const visible = S.prs.filter(p => !hidden.includes(p));
+  const approvedNote = hidden.length || S.showApproved
+    ? `<div style="margin-top:8px;color:var(--muted);font-size:12px">${S.showApproved
+        ? `Mostrando también las aprobadas. <button class="link" onclick="toggleApproved()">ocultarlas</button>`
+        : `${hidden.length} PR${hidden.length === 1 ? '' : 's'} aprobada${hidden.length === 1 ? '' : 's'} oculta${hidden.length === 1 ? '' : 's'}. <button class="link" onclick="toggleApproved()">mostrarlas</button>`}</div>`
+    : '';
 
   // 1) Revisadas sin publicar comentarios: borradores pendientes.
-  const drafts = S.prs.filter(p => p.draft && p.draft.status === 'pending');
+  const drafts = visible.filter(p => p.draft && p.draft.status === 'pending');
   const draftsHtml = `<h2>Revisadas sin publicar comentarios · ${drafts.length}</h2>` + (drafts.length ? `
     <table><tbody>${drafts.map(pr => `
       <tr>
@@ -518,14 +538,14 @@ function renderList() {
         <td><div class="title">${esc(pr.title)}</div>
             <div class="meta">${esc(pr.author)} · generado ${esc(pr.draft.created_at.slice(5, 16))}${pr.draft.cost_usd != null ? ` · ${pr.draft.cost_usd.toFixed(2)} USD` : ''}</div></td>
         <td><span class="pill warn">${pr.draft.comments} de ${pr.draft.total} com.${pr.draft.praise ? ' + elogio' : ''}${pr.draft.stale ? ' · obsoleto' : ''}</span></td>
-        <td class="actions"><button class="primary" onclick="openDraft('${pr.repo}', ${pr.number})">Ver borrador</button></td>
+        <td class="actions">${btnset([`<button class="primary" onclick="openDraft('${pr.repo}', ${pr.number})">Ver borrador</button>`])}</td>
       </tr>`).join('')}</tbody></table>`
     : `<div class="empty quote" style="margin-top:8px"><em>«Observo todo lo que ocurre aquí, pero no interfiero.»</em>No hay borradores pendientes. Pulsa «Revisar» en una PR para que el Vigilante genere uno.</div>`);
 
   // 2) Revisadas con comentarios publicados: la última revisión acabó en publicación.
-  const published = S.prs.filter(p => p.last && p.last.status === 'reviewed');
+  const published = visible.filter(p => p.last && p.last.status === 'reviewed');
   const publishedHtml = `<h2>Revisadas con comentarios publicados · ${published.length}</h2>` + (published.length ? `
-    <table><thead><tr><th style="width:70px">PR</th><th>Título</th><th style="width:230px">Estado</th><th style="width:220px"></th></tr></thead>
+    <table><thead><tr><th style="width:70px">PR</th><th>Título</th><th style="width:230px">Estado</th><th style="width:150px"></th></tr></thead>
     <tbody>${published.map(pr => `
       <tr>
         <td class="num"><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a></td>
@@ -536,9 +556,11 @@ function renderList() {
       </tr>`).join('')}</tbody></table>`
     : `<div class="empty" style="margin-top:8px">Aún no has publicado comentarios en ninguna PR abierta.</div>`);
 
-  // 3) Repositorios: todas las PRs candidatas, agrupadas por repositorio.
+  // 3) Repositorios: el resto de PRs candidatas (las que ya salen arriba no se repiten), por repositorio.
+  const shown = new Set([...drafts, ...published].map(p => p.key));
+  const rest = visible.filter(p => !shown.has(p.key));
   const reposHtml = `<h2>Repositorios · ${repos.length}</h2>` + repos.map(repo => {
-    const rows = S.prs.filter(p => p.repo === repo);
+    const rows = rest.filter(p => p.repo === repo);
     const body = rows.length ? rows.map(pr => `
       <tr>
         <td class="num"><a href="${esc(pr.url)}" target="_blank" rel="noopener">#${pr.number}</a></td>
@@ -548,13 +570,13 @@ function renderList() {
                  ${fmtAgo(pr.updated_at)}</div></td>
         <td>${statusCell(pr)}</td>
         <td class="actions">${actionsCell(pr)}</td>
-      </tr>`).join('') : `<tr><td colspan="4" style="color:var(--muted)">Nada que observar: sin PRs candidatas</td></tr>`;
+      </tr>`).join('') : `<tr><td colspan="4" style="color:var(--muted)">Nada que observar: ${visible.some(p => p.repo === repo) ? 'todas sus PRs ya salen arriba' : S.prs.some(p => p.repo === repo) ? 'sólo PRs aprobadas' : 'sin PRs candidatas'}</td></tr>`;
     return `<h3>${esc(S.config.org)}/${esc(repo)} <span style="font-weight:400">· ${rows.length}</span></h3>
-      <table><thead><tr><th style="width:70px">PR</th><th>Título</th><th style="width:230px">Estado</th><th style="width:220px"></th></tr></thead>
+      <table><thead><tr><th style="width:70px">PR</th><th>Título</th><th style="width:230px">Estado</th><th style="width:150px"></th></tr></thead>
       <tbody>${body}</tbody></table>`;
   }).join('');
 
-  return draftsHtml + publishedHtml + reposHtml + `<p class="oath">Uatu, el Vigilante, observa la Tierra desde el Área Azul de la Luna y juró no interferir jamás.<br>Aquí observa las PRs de ${esc(S.config.org || '')}: intervenir (publicar) es siempre decisión tuya.</p>`;
+  return approvedNote + draftsHtml + publishedHtml + reposHtml + `<p class="oath">Uatu, el Vigilante, observa la Tierra desde el Área Azul de la Luna y juró no interferir jamás... pero no lo puede evitar.<br>Aquí observa las PRs de ${esc(S.config.org || '')}: intervenir (publicar) es siempre decisión tuya.</p>`;
 }
 
 function renderDraft() {
@@ -650,7 +672,7 @@ function renderConversation() {
   html += `
     <div class="approve-box">
       ${c.can_approve
-        ? `<div>Si las respuestas te convencen, aprueba desde aquí: sale como review <b>APPROVE</b> de ${esc(me)} sobre <code>${c.head.slice(0, 10)}</code>, el commit que UATU ya revisó.</div>
+        ? `<div>Si las respuestas te convencen, aprueba desde aquí: sale como review <b>APPROVE</b> de ${esc(me)} sobre <code>${c.head.slice(0, 10)}</code>, ${unreviewedCommits(c) ? `que UATU <b>no ha revisado</b> (la última revisión llegó hasta <code>${c.last.sha.slice(0, 10)}</code>); si prefieres verlo antes, vuelve a la lista y pulsa «Revisar delta»` : 'el commit que UATU ya revisó'}.</div>
            <div class="row"><input id="approve-msg" placeholder="Mensaje opcional (p. ej. «Gracias por los cambios, LGTM»)"><button class="ok" onclick="approve('${c.repo}', ${c.number}, true)">Aprobar PR</button></div>`
         : `<div style="color:var(--muted);font-size:13px">${a ? 'Ya está aprobada. ' : ''}Para contestar a los hilos${a ? '' : ' o seguir la PR'}, ve a <a href="${esc(c.url)}" target="_blank" rel="noopener">GitHub</a>.</div>`}
     </div>`;
