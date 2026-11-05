@@ -23,9 +23,11 @@ y el juramento de no interferir como recordatorio de que publicar es siempre dec
 `web.sh start` imprime la URL local y la de la red (`http://<ip>:8787/`). Para una sesión
 en primer plano que abra el navegador: `python3 server.py`.
 
-1. Arriba del todo, **Borradores pendientes de publicar**: lo que hay generado y aún no
-   se ha mandado. Debajo, las PRs candidatas por repo con su estado: *sin revisar*,
-   *commits nuevos*, *al día* o *borrador listo*.
+1. La lista tiene tres bloques, en este orden: **Revisadas sin publicar comentarios**
+   (borradores generados y aún no mandados), **Revisadas con comentarios publicados**
+   (PRs abiertas cuya última revisión acabó publicada en GitHub) y **Repositorios**, con
+   todas las PRs candidatas por repo y su estado: *sin revisar*, *commits nuevos*, *al día*
+   o *borrador listo*.
 2. **Revisar** encola la PR; un único hilo las procesa de una en una (1–4 min cada una).
    **Revisar pendientes** encola hasta `max_prs_per_run` de golpe.
 3. **Ver borrador** enseña cada comentario con el código señalado. Puedes editar el texto,
@@ -39,7 +41,27 @@ sobrescribe. Los trabajos en cola viven en memoria: reiniciar el servidor los pi
 aunque los borradores ya generados quedan en disco.
 
 Los borradores publicados o descartados se pueden seguir consultando en sólo lectura. La URL
-`#repo/número` abre un borrador directamente.
+`#repo/número` abre un borrador directamente; `#repo/número/respuestas`, su conversación.
+
+### Después de publicar: respuestas y aprobación
+
+La lista lee de GitHub, en una consulta GraphQL por repo, dos cosas más por PR:
+
+- **Aprobada**: si mi última review con opinión es un `APPROVE` vigente (un `COMMENT` posterior
+  no lo quita; un *dismiss* sí), la PR lleva la etiqueta verde «✓ aprobada». Si el approve fue
+  sobre un commit anterior al actual, dice «aprobada · commits después». Vale también para lo
+  aprobado a mano en GitHub.
+- **Respuestas**: los hilos que empiezan con un comentario mío y lo que han contestado en ellos.
+  La etiqueta «N respuestas · M nuevas» se pulsa para abrir la conversación; «nuevas» son las
+  posteriores a la última vez que la abrí (`state/seen.json`). Cada hilo marca si está resuelto,
+  si el código ya cambió (*obsoleto*) y si la última palabra no es mía (*por contestar*). Desde
+  ahí no se contesta: para eso, GitHub.
+
+El botón **Aprobar** (en la lista y al pie de la conversación, con un mensaje opcional) manda una
+review `APPROVE` sobre el commit actual, y es la única review que UATU envía que no es `COMMENT`.
+Sólo aparece si UATU ya revisó ese commit (estado *al día*, publicado o descartado), no hay un
+borrador pendiente para él y no está ya aprobada; el servidor vuelve a comprobarlo antes de enviar.
+Con commits sin revisar, primero «Revisar delta».
 
 Por defecto el servidor sólo escucha en `127.0.0.1`. Para entrar desde otro equipo de la
 red local: `python3 server.py --host 0.0.0.0` y abrir `http://<ip-del-mac>:8787/`
@@ -59,7 +81,7 @@ publicar reviews con tu cuenta, así que sólo en redes de confianza. Las llamad
 | Identidad | usuario `anbillin` (gh ya autenticado) |
 | PRs elegibles | abiertas, no draft, autor ≠ yo, autor ∉ bots |
 | Re-revisión | sólo el delta de commits desde la última revisión; si hubo force-push, la PR entera |
-| Tipo de review | siempre `COMMENT`; nunca approve ni request-changes |
+| Tipo de review | los borradores salen siempre como `COMMENT`; `APPROVE` sólo a mano desde el botón «Aprobar», y nunca request-changes |
 | Sin hallazgos | se descarta el borrador y se anota en el estado local |
 | Topes | 3 PRs por «Revisar pendientes» · 3000 líneas cambiadas por PR · 12 comentarios por review |
 
@@ -103,7 +125,11 @@ python3 uatu.py review gofre 1640         # genera el borrador y lo enseña por 
 python3 uatu.py review gofre 1640 --full  # ignora revisiones previas (PR entera)
 python3 uatu.py publish gofre 1640        # publica un borrador existente
 python3 uatu.py run --repo tortilla --max 2   # borradores para las pendientes, sin publicar
+python3 uatu.py replies gofre 1640        # respuestas a mis comentarios en esa PR
+python3 uatu.py approve gofre 1640 -m "LGTM"  # APPROVE, con las mismas condiciones que el botón
 ```
+
+`status` añade `APROBADA` (con `*` si hubo commits después del approve) y el número de respuestas.
 
 La CLI y el servidor pueden convivir: comparten el lock por repo y el estado.
 

@@ -9,6 +9,8 @@ Uso:
   uatu.py review <repo> <pr> [--full] [--publish]
   uatu.py run [--repo gofre] [--max N]      # borradores para las pendientes
   uatu.py publish <repo> <pr>               # publica un borrador existente
+  uatu.py replies <repo> <pr>               # respuestas a mis comentarios
+  uatu.py approve <repo> <pr> [-m msg]      # APPROVE, sólo si ya está revisada al día
 """
 import argparse
 import collections
@@ -31,6 +33,7 @@ DRAFTS_DIR = STATE_DIR / "drafts"
 LOGS_DIR = ROOT / "logs"
 STATE_FILE = STATE_DIR / "reviewed.json"
 PRAISE_FILE = STATE_DIR / "praise.json"
+SEEN_FILE = STATE_DIR / "seen.json"   # última respuesta vista por PR, para marcar las nuevas
 PROMPT_FILE = ROOT / "prompts" / "review-pr.md"
 AGREEMENTS_FILE = ROOT / "prompts" / "code-agreements.json"
 # Ids de los Code Agreements, para que el esquema de salida sólo admita los que existen.
@@ -239,12 +242,19 @@ def last_reviewed_sha(repo: str, number: int, state: dict):
 
 def overview() -> list:
     """Todas las PRs candidatas con su estado local, borrador incluido."""
-    state = load_state()
+    state, seen = load_state(), load_seen()
     rows = []
     for repo in CONFIG["repos"]:
-        for pr in list_candidates(repo):
+        prs = list_candidates(repo)
+        try:
+            convs = fetch_conversations(repo, [p["number"] for p in prs])
+        except Exception as exc:  # noqa: BLE001 — la lista sigue valiendo sin esta capa
+            log(f"{repo}: no se pudo leer aprobaciones/respuestas: {str(exc)[:200]}")
+            convs = {}
+        for pr in prs:
             key = state_key(repo, pr["number"])
             entry = state.get(key)
+            conv = convs.get(pr["number"])
             if entry and entry["sha"] == pr["headRefOid"]:
                 status = "al-dia"
             elif entry:
@@ -259,8 +269,155 @@ def overview() -> list:
                 "updated_at": pr["updatedAt"], "additions": pr["additions"],
                 "deletions": pr["deletions"], "status": status, "last": entry,
                 "draft": draft_summary(draft, pr["headRefOid"]) if draft else None,
+                "approval": conv["approval"] if conv else None,
+                "conversation": conversation_summary(conv, key, seen) if conv else None,
+                "can_approve": can_approve(pr, entry, conv["approval"])[0] if conv else False,
             })
     return rows
+
+
+# ----------------------------------------------------------------- conversación y aprobación
+
+CONVERSATION_FRAGMENT = """
+fragment PR on PullRequest {
+  number headRefOid
+  reviews(last: 30, author: "%s") { nodes { state submittedAt url commit { oid } } }
+  reviewThreads(first: 100) { nodes { id isResolved isOutdated path line originalLine
+    comments(first: 30) { nodes { databaseId author { login } body createdAt url } } } }
+}"""
+
+
+def load_seen() -> dict:
+    with STATE_LOCK:
+        return json.loads(SEEN_FILE.read_text()) if SEEN_FILE.exists() else {}
+
+
+def mark_seen(key: str, latest: str) -> None:
+    """Anota hasta qué respuesta (createdAt ISO) se ha visto ya en esa PR."""
+    if not latest:
+        return
+    with STATE_LOCK:
+        seen = load_seen()
+        if seen.get(key, "") >= latest:
+            return
+        seen[key] = latest
+        STATE_DIR.mkdir(exist_ok=True)
+        SEEN_FILE.write_text(json.dumps(seen, indent=2, sort_keys=True))
+
+
+def my_approval(reviews: list):
+    """Mi última review con opinión (approve / request-changes / dismissed). Sólo cuenta
+    si es un APPROVED vigente: un COMMENT posterior no la quita, un dismiss sí."""
+    opinionated = [r for r in reviews if r["state"] in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")]
+    last = opinionated[-1] if opinionated else None
+    if not last or last["state"] != "APPROVED":
+        return None
+    return {"at": last["submittedAt"], "sha": (last.get("commit") or {}).get("oid"), "url": last["url"]}
+
+
+def parse_threads(nodes: list) -> list:
+    """Los hilos que empiezan con un comentario mío, con sus respuestas."""
+    threads = []
+    for t in nodes:
+        cs = t["comments"]["nodes"]
+        if not cs or (cs[0].get("author") or {}).get("login") != ME:
+            continue
+        def item(c):
+            return {"id": c["databaseId"], "author": (c.get("author") or {}).get("login") or "(borrado)",
+                    "body": c["body"], "at": c["createdAt"], "url": c["url"]}
+        replies = [item(c) for c in cs[1:]]
+        threads.append({
+            "id": t["id"], "path": t["path"], "line": t["line"] or t["originalLine"],
+            "resolved": t["isResolved"], "outdated": t["isOutdated"],
+            "comment": item(cs[0]), "replies": replies,
+            # alguien ha contestado y la última palabra no es mía: me toca mirar
+            "awaiting_me": bool(replies) and replies[-1]["author"] != ME and not t["isResolved"],
+        })
+    return threads
+
+
+def conversation_summary(conv: dict, key: str, seen: dict) -> dict:
+    """Lo que la lista necesita: cuántas respuestas hay, cuántas sin ver, cuántas esperan."""
+    others = [r for t in conv["threads"] for r in t["replies"] if r["author"] != ME]
+    last_seen = seen.get(key, "")
+    return {
+        "threads": len(conv["threads"]),
+        "replies": len(others),
+        "new": sum(1 for r in others if r["at"] > last_seen),
+        "awaiting_me": sum(1 for t in conv["threads"] if t["awaiting_me"]),
+        "unresolved": sum(1 for t in conv["threads"] if not t["resolved"]),
+        "last_reply_at": max((r["at"] for r in others), default=None),
+    }
+
+
+def fetch_conversations(repo: str, numbers: list) -> dict:
+    """Una sola consulta GraphQL por repo: mi aprobación y los hilos de mis comentarios
+    en cada PR. Devuelve {número: {"approval", "threads", "head"}}."""
+    if not numbers:
+        return {}
+    body = "\n".join(f"p{n}: pullRequest(number: {n}) {{ ...PR }}" for n in numbers)
+    query = ("query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {\n"
+             f"{body}\n}} }}" + CONVERSATION_FRAGMENT % ME)
+    data = gh_json(["api", "graphql", "-f", f"query={query}", "-F", f"owner={ORG}", "-F", f"name={repo}"])
+    out = {}
+    for pr in ((data.get("data") or {}).get("repository") or {}).values():
+        if not pr:
+            continue
+        out[pr["number"]] = {
+            "head": pr["headRefOid"],
+            "approval": my_approval(pr["reviews"]["nodes"]),
+            "threads": parse_threads(pr["reviewThreads"]["nodes"]),
+        }
+    return out
+
+
+def get_conversation(repo: str, number: int) -> dict:
+    """Conversación completa de una PR, para verla en la web; marca las respuestas como vistas."""
+    pr = get_pr(repo, number)
+    conv = fetch_conversations(repo, [number]).get(number) or {"approval": None, "threads": []}
+    key = state_key(repo, number)
+    entry = load_state().get(key)
+    can, why = can_approve(pr, entry, conv["approval"])
+    seen_until = load_seen().get(key)
+    summary = conversation_summary(conv, key, load_seen())
+    mark_seen(key, summary["last_reply_at"])
+    return {
+        "key": key, "repo": repo, "number": number, "title": pr["title"], "author": pr["author"]["login"],
+        "url": pr["url"], "head": pr["headRefOid"], "head_ref": pr["headRefName"], "base_ref": pr["baseRefName"],
+        "last": entry, "approval": conv["approval"], "threads": conv["threads"],
+        "summary": summary, "seen_until": seen_until,  # respuestas posteriores: las «nuevas» de esta visita
+        "can_approve": can, "approve_blocked": why,
+    }
+
+
+def can_approve(pr: dict, entry, approval):
+    """Sólo se aprueba lo que ya se ha revisado hasta su commit actual y no está aprobado."""
+    if approval:
+        return False, "ya está aprobada"
+    if not entry:
+        return False, "UATU no ha revisado esta PR"
+    if entry["sha"] != pr["headRefOid"]:
+        return False, "hay commits sin revisar: revisa el delta antes de aprobar"
+    draft = load_draft(pr["repo"], pr["number"])
+    if draft and draft["status"] == "pending" and draft["head"] == pr["headRefOid"]:
+        return False, "hay un borrador pendiente para este commit: publícalo o descártalo"
+    return True, None
+
+
+def approve_pr(repo: str, number: int, message: str = "") -> dict:
+    """Manda una review APPROVE sobre el commit actual. Es la única review que no es COMMENT,
+    y siempre la pide una persona desde la web o la CLI."""
+    pr = get_pr(repo, number)
+    key = state_key(repo, number)
+    conv = fetch_conversations(repo, [number]).get(number) or {"approval": None}
+    ok, why = can_approve(pr, load_state().get(key), conv["approval"])
+    if not ok:
+        raise ValueError(why)
+    payload = {"commit_id": pr["headRefOid"], "event": "APPROVE", "body": (message or "").strip()}
+    sh(["gh", "api", "-X", "POST", f"repos/{ORG}/{repo}/pulls/{number}/reviews", "--input", "-"],
+       input_text=json.dumps(payload))
+    log(f"{key}: aprobada en {pr['headRefOid'][:10]}{' con mensaje' if payload['body'] else ''} · {pr['url']}")
+    return {"key": key, "sha": pr["headRefOid"], "at": now()}
 
 
 # ----------------------------------------------------------------- git
@@ -683,6 +840,32 @@ def cmd_publish(args) -> None:
     publish_draft(draft)
 
 
+def cmd_approve(args) -> None:
+    try:
+        res = approve_pr(args.repo, args.pr, args.message or "")
+    except ValueError as err:
+        sys.exit(f"{args.repo}#{args.pr}: no se aprueba, {err}")
+    print(f"{res['key']} aprobada en {res['sha'][:10]}")
+
+
+def cmd_replies(args) -> None:
+    """Enseña por consola los hilos de mis comentarios con sus respuestas."""
+    conv = get_conversation(args.repo, args.pr)
+    print(f"{conv['key']} · {conv['title']}\n{conv['url']}")
+    if conv["approval"]:
+        print(f"aprobada por {ME} el {conv['approval']['at']} en {(conv['approval']['sha'] or '')[:10]}")
+    for t in conv["threads"]:
+        flags = " ".join(f for f, on in (("resuelto", t["resolved"]), ("obsoleto", t["outdated"]),
+                                         ("por contestar", t["awaiting_me"])) if on)
+        print(f"\n{t['path']}:{t['line']} {flags}")
+        print(f"  {ME}: {t['comment']['body'].strip()}")
+        for r in t["replies"]:
+            print(f"  ↳ {r['author']} ({r['at'][:16]}): {r['body'].strip()}")
+    s = conv["summary"]
+    print(f"\n{s['threads']} hilos · {s['replies']} respuestas · {s['awaiting_me']} por contestar"
+          + (f" · {'se puede aprobar' if conv['can_approve'] else conv['approve_blocked']}"))
+
+
 def cmd_status(args) -> None:
     labels = {"al-dia": "al día", "nuevos-commits": "nuevos commits", "pendiente": "pendiente"}
     for r in overview():
@@ -692,7 +875,13 @@ def cmd_status(args) -> None:
         d = r["draft"]
         if d and d["status"] == "pending":
             st += f" · borrador {d['comments']} com." + (" OBSOLETO" if d["stale"] else "")
-        print(f"{r['key']:<16} {st:<36} {r['author']:<24} {r['title'][:60]}")
+        extra = []
+        if r["approval"]:
+            extra.append("APROBADA" + ("*" if r["approval"]["sha"] != r["head"] else ""))
+        c = r["conversation"]
+        if c and c["replies"]:
+            extra.append(f"{c['replies']} resp." + (f" ({c['new']} nuevas)" if c["new"] else ""))
+        print(f"{r['key']:<16} {st:<36} {' '.join(extra):<24} {r['author']:<22} {r['title'][:50]}")
 
 
 def main() -> None:
@@ -712,7 +901,16 @@ def main() -> None:
     p.add_argument("repo")
     p.add_argument("pr", type=int)
     p.set_defaults(fn=cmd_publish)
-    p = sub.add_parser("status", help="muestra el estado de cada PR candidata")
+    p = sub.add_parser("approve", help="aprueba una PR ya revisada hasta su commit actual")
+    p.add_argument("repo")
+    p.add_argument("pr", type=int)
+    p.add_argument("-m", "--message", help="cuerpo opcional de la review de aprobación")
+    p.set_defaults(fn=cmd_approve)
+    p = sub.add_parser("replies", help="enseña las respuestas a mis comentarios en una PR")
+    p.add_argument("repo")
+    p.add_argument("pr", type=int)
+    p.set_defaults(fn=cmd_replies)
+    p = sub.add_parser("status", help="muestra el estado de cada PR candidata (APROBADA* = commits después del approve)")
     p.set_defaults(fn=cmd_status)
     args = ap.parse_args()
     args.fn(args)

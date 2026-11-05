@@ -116,6 +116,9 @@
        text-transform: uppercase; letter-spacing: .18em; }
   h2::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--glow); flex: none; }
   h2::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line), transparent); }
+  h3 { display: flex; align-items: center; gap: 8px; font: 600 12px/1.2 var(--display); margin: 18px 0 8px; color: var(--muted);
+       letter-spacing: .04em; }
+  h3::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--line-2), transparent); }
   table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; box-shadow: var(--shadow); }
   th, td { text-align: left; padding: 10px 14px; border-top: 1px solid var(--line-2); vertical-align: top; }
   th { font: 600 11px/1.2 var(--display); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); border-top: none; background: var(--card-2); }
@@ -125,6 +128,7 @@
   td .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
   td.actions { white-space: nowrap; text-align: right; }
   td.actions button + button { margin-left: 6px; }
+  td.actions button.link + button.link { margin-left: 10px; }
   .msg { color: var(--muted); font-size: 12px; margin-top: 4px; max-width: 420px; white-space: normal; }
   .msg.bad { color: var(--bad); }
   .empty { padding: 26px; color: var(--muted); text-align: center; background: var(--card); border: 1px dashed var(--line); border-radius: 12px; }
@@ -166,6 +170,25 @@
             box-shadow: 0 -10px 30px -20px rgba(0,0,0,.5); }
   .footer .spacer { flex: 1; }
   .footer .hint { color: var(--muted); font-size: 12px; }
+  /* ---------- conversación: lo que han contestado a lo que publicaste ---------- */
+  .pill.approved::before { content: "✓"; margin-right: 5px; font-weight: 700; }
+  .pill.click { cursor: pointer; }
+  .pill.click:hover { border-color: var(--accent); color: var(--accent); }
+  .thread .bar .flags { display: flex; gap: 6px; }
+  .thread .msg-row { display: grid; grid-template-columns: 150px 1fr; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line-2); }
+  .thread .msg-row:first-of-type { border-top: none; }
+  .thread .msg-row.me { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .thread .msg-row.new { box-shadow: inset 3px 0 0 var(--accent); }
+  .thread .who { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .thread .who b { display: block; color: var(--ink); font-weight: 600; }
+  .thread .who a { color: var(--muted); }
+  .thread .text { font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .thread .text pre { margin: 6px 0; padding: 8px 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line-2); font: 12px/1.5 var(--mono); overflow-x: auto; white-space: pre; }
+  .thread .text code { font: 12px var(--mono); background: color-mix(in srgb, var(--muted) 12%, transparent); padding: 1px 4px; border-radius: 4px; }
+  .approve-box { margin-top: 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); box-shadow: var(--shadow); }
+  .approve-box .row { display: flex; gap: 10px; align-items: flex-start; margin-top: 10px; }
+  .approve-box .row input { flex: 1; font: 13px var(--mono); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); min-height: 34px; }
+  .approve-box .row input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
   pre.log { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; font: 12px/1.5 var(--mono);
             max-height: 320px; overflow: auto; white-space: pre-wrap; color: var(--muted); }
   .oath { margin: 40px auto 0; text-align: center; color: var(--muted); font: italic 12px/1.5 var(--display); letter-spacing: .04em; opacity: .8; }
@@ -182,6 +205,7 @@
     header button { flex: 1; min-height: 38px; }
     main { padding: 12px 10px 120px; }
     h2 { margin: 18px 0 8px; font-size: 11px; }
+    h3 { margin: 14px 0 6px; font-size: 11px; }
     button { min-height: 38px; padding: 6px 12px; }
     button.link { min-height: 0; }
     /* la tabla pasa a tarjetas */
@@ -222,6 +246,10 @@
     .toast { bottom: auto; top: 60px; }
     pre.log { font-size: 11px; max-height: 220px; }
     .oath { display: none; }
+    .thread .msg-row { grid-template-columns: 1fr; gap: 4px; padding: 10px; }
+    .thread .who b { display: inline; margin-right: 6px; }
+    .approve-box .row { flex-wrap: wrap; }
+    .approve-box .row input { font-size: 16px; flex: 1 1 100%; }
   }
 </style>
 </head>
@@ -253,7 +281,7 @@
 
 <script>
 const S = { prs: [], jobs: {}, config: {}, generatedAt: null, error: null,
-            view: 'list', draft: null, showLog: false, logLines: [], timer: null };
+            view: 'list', draft: null, conv: null, showLog: false, logLines: [], timer: null };
 
 // ------------------------------------------------------------ util
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -263,6 +291,13 @@ const fmtAgo = iso => {
   if (d < 86400) return `hace ${Math.round(d / 3600)} h`;
   return `hace ${Math.round(d / 86400)} d`;
 };
+// Suficiente para leer una respuesta: bloques de código y código inline; el resto, texto.
+function md(text) {
+  const parts = String(text ?? '').split(/```[^\n]*\n([\s\S]*?)```/);
+  return parts.map((seg, i) => i % 2 ? `<pre>${esc(seg.replace(/\n$/, ''))}</pre>`
+    : esc(seg).replace(/`([^`\n]+)`/g, '<code>$1</code>')).join('');
+}
+const fmtWhen = iso => iso ? iso.slice(0, 16).replace('T', ' ') : '';
 function toast(msg, bad) {
   const t = document.getElementById('toast');
   t.textContent = msg; t.className = 'toast show' + (bad ? ' bad' : '');
@@ -329,7 +364,24 @@ async function openDraft(repo, number) {
     S.view = 'draft'; history.replaceState(null, '', `#${repo}/${number}`); render(true); window.scrollTo(0, 0);
   } catch (e) { toast(e.message, true); }
 }
-function backToList() { S.view = 'list'; S.draft = null; history.replaceState(null, '', location.pathname); render(true); }
+async function openConversation(repo, number) {
+  try {
+    S.conv = await api('GET', `/api/prs/${repo}/${number}/conversation`);
+    S.view = 'conv'; history.replaceState(null, '', `#${repo}/${number}/respuestas`); render(true); window.scrollTo(0, 0);
+    refresh(false);  // al verlas dejan de ser «nuevas» en la lista
+  } catch (e) { toast(e.message, true); }
+}
+async function approve(repo, number, fromConv) {
+  const msgEl = fromConv ? document.getElementById('approve-msg') : null;
+  const message = msgEl ? msgEl.value.trim() : '';
+  if (!confirm(`Aprobar ${repo}#${number} como ${S.config.me}?${message ? `\n\nMensaje: ${message}` : ''}\n\nSale como review APPROVE sobre el commit actual.`)) return;
+  try {
+    await api('POST', `/api/prs/${repo}/${number}/approve`, { message });
+    toast(`${repo}#${number} aprobada`);
+    if (fromConv) await openConversation(repo, number); else await refresh(true);
+  } catch (e) { toast(e.message, true); }
+}
+function backToList() { S.view = 'list'; S.draft = null; S.conv = null; history.replaceState(null, '', location.pathname); render(true); }
 
 function collectEdits() {
   const comments = [...document.querySelectorAll('.card[data-i]')].map(card => ({
@@ -385,12 +437,12 @@ function render(force) {
   document.getElementById('updated').textContent = S.generatedAt ? `lista de ${S.generatedAt.slice(11, 16)}` : '';
   const main = document.getElementById('main');
   // En la vista de borrador no se repinta por el sondeo: se perdería el scroll y lo editado.
-  if (S.view === 'draft' && !force && main.querySelector('.draft-head')) {
+  if ((S.view === 'draft' || S.view === 'conv') && !force && main.querySelector('.draft-head')) {
     const l = main.querySelector('pre.log'); if (l) l.textContent = S.logLines.join('\n') || '(vacío)';
     return;
   }
   const y = window.scrollY;
-  let html = S.view === 'draft' ? renderDraft() : renderList();
+  let html = S.view === 'draft' ? renderDraft() : S.view === 'conv' ? renderConversation() : renderList();
   if (S.showLog) html += `<h2>Log</h2><pre class="log">${esc(S.logLines.join('\n')) || '(vacío)'}</pre>`;
   main.innerHTML = html;
   if (S.view === 'draft') { updateCount(); main.querySelectorAll('textarea').forEach(autosize); }
@@ -398,8 +450,20 @@ function render(force) {
   if (!force) window.scrollTo(0, y);
 }
 
+function approvalPill(pr) {
+  const a = pr.approval; if (!a) return '';
+  const after = a.sha && a.sha !== pr.head;
+  return `<span class="pill ok approved" title="aprobada por ${esc(S.config.me)} el ${esc(fmtWhen(a.at))}${after ? '; después han entrado commits' : ''}">aprobada${after ? ' · commits después' : ''}</span>`;
+}
+function repliesPill(pr) {
+  const c = pr.conversation; if (!c || !c.replies) return '';
+  const r = `'${pr.repo}', ${pr.number}`;
+  const label = `${c.replies} respuesta${c.replies === 1 ? '' : 's'}` + (c.new ? ` · ${c.new} nueva${c.new === 1 ? '' : 's'}` : '');
+  return `<span class="pill click ${c.new ? 'accent' : ''}" onclick="openConversation(${r})" title="${c.awaiting_me} hilo(s) esperan tu respuesta">${label}</span>`;
+}
 function statusCell(pr) {
   const job = S.jobs[pr.key], d = pr.draft, out = [];
+  const ap = approvalPill(pr); if (ap) out.push(ap);
   if (job && job.status === 'queued') out.push('<span class="pill accent">en cola</span>');
   else if (job && job.status === 'running') out.push(`<span class="pill accent busy">revisando desde ${job.started_at.slice(11, 16)}</span>`);
   if (d && d.status === 'pending') {
@@ -412,6 +476,7 @@ function statusCell(pr) {
   } else if (!job || job.status !== 'running') {
     out.push('<span class="pill">sin revisar</span>');
   }
+  const rp = repliesPill(pr); if (rp) out.push(rp);
   let msg = '';
   if (job && (job.status === 'error' || job.status === 'skipped')) {
     msg = `<div class="msg ${job.status === 'error' ? 'bad' : ''}">${job.status === 'error' ? 'Error: ' : 'Omitida: '}${esc(job.message)}</div>`;
@@ -432,6 +497,10 @@ function actionsCell(pr) {
     out.push(`<button onclick="review(${r}, false)" title="Sólo los commits nuevos">Revisar delta</button>`);
   else if (!(d && d.status === 'pending'))
     out.push(`<button class="primary" onclick="review(${r}, false)">Revisar</button>`);
+  // Aprobar sólo aparece cuando UATU ya revisó el commit actual y no está aprobada.
+  if (pr.can_approve) out.push(`<button class="ok" onclick="approve(${r})" title="Review APPROVE sobre el commit actual">Aprobar</button>`);
+  if (pr.conversation && pr.conversation.threads)
+    out.push(`<button class="link" onclick="openConversation(${r})">${pr.conversation.replies ? 'respuestas' : 'hilos'}</button>`);
   if (d && d.status !== 'pending') out.push(`<button class="link" onclick="openDraft(${r})">ver ${d.status === 'published' ? 'publicado' : 'descartado'}</button>`);
   return out.join('');
 }
@@ -439,8 +508,10 @@ function renderList() {
   if (S.error) return `<div class="empty">No se pudo cargar la lista de PRs.<br><code>${esc(S.error)}</code><br><br><button onclick="refresh(true)">Reintentar</button></div>`;
   if (!S.prs.length && !S.generatedAt) return `<div class="empty">Observando el multiverso…</div>`;
   const repos = S.config.repos || [];
+
+  // 1) Revisadas sin publicar comentarios: borradores pendientes.
   const drafts = S.prs.filter(p => p.draft && p.draft.status === 'pending');
-  const draftsHtml = drafts.length ? `<h2>Borradores pendientes de publicar · ${drafts.length}</h2>
+  const draftsHtml = `<h2>Revisadas sin publicar comentarios · ${drafts.length}</h2>` + (drafts.length ? `
     <table><tbody>${drafts.map(pr => `
       <tr>
         <td class="num"><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a></td>
@@ -449,8 +520,24 @@ function renderList() {
         <td><span class="pill warn">${pr.draft.comments} de ${pr.draft.total} com.${pr.draft.praise ? ' + elogio' : ''}${pr.draft.stale ? ' · obsoleto' : ''}</span></td>
         <td class="actions"><button class="primary" onclick="openDraft('${pr.repo}', ${pr.number})">Ver borrador</button></td>
       </tr>`).join('')}</tbody></table>`
-    : `<div class="empty quote" style="margin-top:8px"><em>«Observo todo lo que ocurre aquí, pero no interfiero.»</em>No hay borradores pendientes. Pulsa «Revisar» en una PR para que el Vigilante genere uno.</div>`;
-  return draftsHtml + repos.map(repo => {
+    : `<div class="empty quote" style="margin-top:8px"><em>«Observo todo lo que ocurre aquí, pero no interfiero.»</em>No hay borradores pendientes. Pulsa «Revisar» en una PR para que el Vigilante genere uno.</div>`);
+
+  // 2) Revisadas con comentarios publicados: la última revisión acabó en publicación.
+  const published = S.prs.filter(p => p.last && p.last.status === 'reviewed');
+  const publishedHtml = `<h2>Revisadas con comentarios publicados · ${published.length}</h2>` + (published.length ? `
+    <table><thead><tr><th style="width:70px">PR</th><th>Título</th><th style="width:230px">Estado</th><th style="width:220px"></th></tr></thead>
+    <tbody>${published.map(pr => `
+      <tr>
+        <td class="num"><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a></td>
+        <td><div class="title">${esc(pr.title)}</div>
+            <div class="meta">${esc(pr.author)} · publicados ${pr.last.findings} com. ${esc(fmtAgo(pr.last.at))} hasta <code>${esc(pr.last.sha.slice(0, 10))}</code></div></td>
+        <td>${statusCell(pr)}</td>
+        <td class="actions">${actionsCell(pr)}</td>
+      </tr>`).join('')}</tbody></table>`
+    : `<div class="empty" style="margin-top:8px">Aún no has publicado comentarios en ninguna PR abierta.</div>`);
+
+  // 3) Repositorios: todas las PRs candidatas, agrupadas por repositorio.
+  const reposHtml = `<h2>Repositorios · ${repos.length}</h2>` + repos.map(repo => {
     const rows = S.prs.filter(p => p.repo === repo);
     const body = rows.length ? rows.map(pr => `
       <tr>
@@ -462,10 +549,12 @@ function renderList() {
         <td>${statusCell(pr)}</td>
         <td class="actions">${actionsCell(pr)}</td>
       </tr>`).join('') : `<tr><td colspan="4" style="color:var(--muted)">Nada que observar: sin PRs candidatas</td></tr>`;
-    return `<h2>${esc(S.config.org)}/${esc(repo)} <span style="font-weight:400">· ${rows.length}</span></h2>
+    return `<h3>${esc(S.config.org)}/${esc(repo)} <span style="font-weight:400">· ${rows.length}</span></h3>
       <table><thead><tr><th style="width:70px">PR</th><th>Título</th><th style="width:230px">Estado</th><th style="width:220px"></th></tr></thead>
       <tbody>${body}</tbody></table>`;
-  }).join('') + `<p class="oath">Uatu, el Vigilante, observa la Tierra desde el Área Azul de la Luna y juró no interferir jamás.<br>Aquí observa las PRs de ${esc(S.config.org || '')}: intervenir (publicar) es siempre decisión tuya.</p>`;
+  }).join('');
+
+  return draftsHtml + publishedHtml + reposHtml + `<p class="oath">Uatu, el Vigilante, observa la Tierra desde el Área Azul de la Luna y juró no interferir jamás.<br>Aquí observa las PRs de ${esc(S.config.org || '')}: intervenir (publicar) es siempre decisión tuya.</p>`;
 }
 
 function renderDraft() {
@@ -481,7 +570,7 @@ function renderDraft() {
       <div class="meta"><span>${esc(d.author)}</span><span><code>${esc(d.head_ref)}</code> → ${esc(d.base_ref)}</span>
         <span>${scope}</span>${d.lines_changed != null ? `<span>${d.lines_changed} líneas</span>` : ''}<span>commit <code>${d.head.slice(0, 10)}</code></span>
         <span>generado ${esc(d.created_at)}</span>${c.cost_usd != null ? `<span>${c.turns} turnos · ${c.cost_usd.toFixed(2)} USD</span>` : ''}</div>
-      ${ro ? `<div class="banner ok">Este borrador ya está ${d.status === 'published' ? `publicado (${esc(d.published_at)}, ${d.published_comments} comentarios)` : `descartado (${esc(d.discarded_at)})`}. Sólo lectura.</div>` : ''}
+      ${ro ? `<div class="banner ok">Este borrador ya está ${d.status === 'published' ? `publicado (${esc(d.published_at)}, ${d.published_comments} comentarios)` : `descartado (${esc(d.discarded_at)})`}. Sólo lectura.${d.status === 'published' ? ` <button class="link" onclick="openConversation('${d.repo}', ${d.number})">Ver respuestas</button>` : ''}</div>` : ''}
       ${!ro && stale ? `<div class="banner warn">La PR tiene commits nuevos desde que se generó este borrador. Puedes publicarlo igual (los comentarios se anclan al commit revisado) o volver a la lista y revisar el delta.</div>` : ''}
       <div style="margin-top:12px"><label class="rule">Resumen (cuerpo de la review; normalmente vacío)</label>
         <textarea id="summary" ${ro ? 'readonly' : ''} style="min-height:44px" oninput="autosize(this)">${esc(d.summary)}</textarea></div>
@@ -525,9 +614,53 @@ function renderDraft() {
   return html;
 }
 
+function renderConversation() {
+  const c = S.conv, s = c.summary, a = c.approval;
+  const me = S.config.me;
+  let html = `
+    <button class="link" onclick="backToList()">← Volver a la lista</button>
+    <div class="draft-head" style="margin-top:10px">
+      <h2><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.repo)}#${c.number}</a> · ${esc(c.title)}</h2>
+      <div class="meta"><span>${esc(c.author)}</span><span><code>${esc(c.head_ref)}</code> → ${esc(c.base_ref)}</span>
+        <span>commit <code>${c.head.slice(0, 10)}</code></span>
+        ${c.last ? `<span>revisada ${esc(c.last.at)} hasta <code>${c.last.sha.slice(0, 10)}</code></span>` : '<span>sin revisar por UATU</span>'}
+        <span>${s.threads} hilo${s.threads === 1 ? '' : 's'} · ${s.replies} respuesta${s.replies === 1 ? '' : 's'}${s.new ? ` · ${s.new} nueva${s.new === 1 ? '' : 's'}` : ''} · ${s.awaiting_me} por contestar</span></div>
+      ${a ? `<div class="banner ok">Aprobada por ${esc(me)} el ${esc(fmtWhen(a.at))} en <code>${esc((a.sha || '').slice(0, 10))}</code>${a.sha && a.sha !== c.head ? '. Después han entrado commits nuevos.' : '.'} <a href="${esc(a.url)}" target="_blank" rel="noopener">ver en GitHub</a></div>` : ''}
+      ${!a && !c.can_approve ? `<div class="banner warn">No se puede aprobar todavía: ${esc(c.approve_blocked)}.</div>` : ''}
+    </div>`;
+  if (!c.threads.length) html += `<div class="empty" style="margin-top:14px">No hay hilos tuyos en esta PR.</div>`;
+  html += c.threads.map(t => {
+    const flags = [t.resolved ? '<span class="pill ok">resuelto</span>' : '', t.outdated ? '<span class="pill" title="el código comentado ha cambiado">obsoleto</span>' : '',
+                   t.awaiting_me ? '<span class="pill accent">por contestar</span>' : ''].join('');
+    const row = (m, isNew) => `
+      <div class="msg-row ${m.author === me ? 'me' : ''} ${isNew ? 'new' : ''}">
+        <div class="who"><b>${esc(m.author)}</b><a href="${esc(m.url)}" target="_blank" rel="noopener" title="abrir en GitHub">${esc(fmtWhen(m.at))}</a></div>
+        <div class="text">${md(m.body)}</div>
+      </div>`;
+    return `
+    <div class="card thread">
+      <div class="bar">
+        <span class="path"><a href="${esc(c.url)}/files" target="_blank" rel="noopener">${esc(t.path)}</a>${t.line ? `:${t.line}` : ''}</span>
+        <span class="flags">${flags}</span>
+      </div>
+      ${row(t.comment, false)}
+      ${t.replies.map(r => row(r, r.author !== me && r.at > (c.seen_until || ''))).join('')}
+    </div>`;
+  }).join('');
+  html += `
+    <div class="approve-box">
+      ${c.can_approve
+        ? `<div>Si las respuestas te convencen, aprueba desde aquí: sale como review <b>APPROVE</b> de ${esc(me)} sobre <code>${c.head.slice(0, 10)}</code>, el commit que UATU ya revisó.</div>
+           <div class="row"><input id="approve-msg" placeholder="Mensaje opcional (p. ej. «Gracias por los cambios, LGTM»)"><button class="ok" onclick="approve('${c.repo}', ${c.number}, true)">Aprobar PR</button></div>`
+        : `<div style="color:var(--muted);font-size:13px">${a ? 'Ya está aprobada. ' : ''}Para contestar a los hilos${a ? '' : ' o seguir la PR'}, ve a <a href="${esc(c.url)}" target="_blank" rel="noopener">GitHub</a>.</div>`}
+    </div>`;
+  return html;
+}
+
 refresh(true).then(() => {
-  const m = location.hash.match(/^#([A-Za-z0-9._-]+)\/(\d+)$/);
-  if (m) openDraft(m[1], parseInt(m[2], 10));
+  const m = location.hash.match(/^#([A-Za-z0-9._-]+)\/(\d+)(\/respuestas)?$/);
+  if (m && m[3]) openConversation(m[1], parseInt(m[2], 10));
+  else if (m) openDraft(m[1], parseInt(m[2], 10));
 });
 </script>
 </body>

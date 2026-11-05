@@ -115,6 +115,7 @@ def overview(force: bool = False) -> list:
 # ----------------------------------------------------------------- HTTP
 
 DRAFT_RE = re.compile(r"^/api/drafts/([A-Za-z0-9._-]+)/(\d+)(?:/(publish|discard))?$")
+PR_RE = re.compile(r"^/api/prs/([A-Za-z0-9._-]+)/(\d+)/(conversation|approve)$")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -180,6 +181,9 @@ class Handler(BaseHTTPRequestHandler):
         m = DRAFT_RE.match(path)
         if m and not m.group(3):
             return self.handle_api(lambda: self.get_draft(m.group(1), int(m.group(2))))
+        m = PR_RE.match(path)
+        if m and m.group(3) == "conversation":
+            return self.handle_api(lambda: self.get_conversation(m.group(1), int(m.group(2))))
         self.send_json({"error": "no encontrado"}, 404)
 
     def do_POST(self):
@@ -188,6 +192,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_api(self.post_review)
         if path == "/api/review-all":
             return self.handle_api(self.post_review_all)
+        m = PR_RE.match(path)
+        if m and m.group(3) == "approve":
+            return self.handle_api(lambda: self.post_approve(m.group(1), int(m.group(2))))
         m = DRAFT_RE.match(path)
         if m and m.group(3) == "publish":
             return self.handle_api(lambda: self.post_publish(m.group(1), int(m.group(2))))
@@ -256,6 +263,27 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError(409, str(err))
         invalidate()
         return draft
+
+    def get_conversation(self, repo, number):
+        """Mis hilos en la PR con sus respuestas (en vivo, sin caché); marca las respuestas
+        como vistas, así que la lista deja de contarlas como nuevas."""
+        if repo not in uatu.CONFIG["repos"]:
+            raise ApiError(400, "repo inválido")
+        conv = uatu.get_conversation(repo, number)
+        invalidate()
+        return conv
+
+    def post_approve(self, repo, number):
+        """Review APPROVE sobre el commit actual. Sólo si UATU ya revisó ese commit."""
+        if repo not in uatu.CONFIG["repos"]:
+            raise ApiError(400, "repo inválido")
+        body = self.read_body()
+        try:
+            res = uatu.approve_pr(repo, number, str(body.get("message") or ""))
+        except ValueError as err:
+            raise ApiError(409, str(err))
+        invalidate()
+        return res
 
     def post_discard(self, repo, number):
         draft = self.get_draft(repo, number)
