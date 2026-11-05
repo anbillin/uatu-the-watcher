@@ -9,6 +9,35 @@ La web (`web/index.html`) lleva la estética del personaje: el ojo del Vigilante
 cósmico visto desde el Área Azul de la Luna (modo oscuro) o la propia superficie lunar (modo claro),
 y el juramento de no interferir como recordatorio de que publicar es siempre decisión tuya.
 
+## Puesta en marcha (para cada compañero)
+
+Cada persona ejecuta su propia instancia en su Mac: las reviews salen con **su** cuenta de GitHub
+y con **su** voz. No hay nada compartido más allá del repo. Hace falta:
+
+- `gh` con sesión (`gh auth login`) y acceso SSH a los repos del equipo.
+- `claude` (Claude Code) instalado y con sesión.
+- Python 3.9 o superior (el de macOS vale).
+
+```bash
+git clone git@github.com:anbillin/uatu-the-watcher.git && cd uatu-the-watcher
+./web.sh start --local        # abre http://127.0.0.1:8787/
+```
+
+La primera vez la web abre en **Setup** y no revisa nada hasta completarlo:
+
+1. **Identidad y comprobaciones**: usuario y nombre (prellenados desde `gh`), y «Comprobar» verifica
+   `gh`, `claude`, Python y el acceso SSH a los repos elegidos.
+2. **Repos**: cuáles observar y qué Code Agreements aplica a cada uno (front o back).
+3. **Voz**: «Importar de GitHub» baja tus últimos comentarios de review en esos repos y `claude`
+   redacta tu voz (ejemplos literales, rasgos, elogios). Lo retocas en el editor, lo pruebas con
+   «Probar voz» (cuatro comentarios de ejemplo escritos con esa voz, unos céntimos) y guardas.
+4. **Elogios, firma, topes y modelo**: en blanco se usa el valor del equipo.
+
+Todo se guarda en `profile/` (`config.json` y `voice.md`), que está en `.gitignore`: lo tuyo no
+viaja con el repo. Se puede volver a Setup cuando se quiera desde el botón de la cabecera, o con
+`python3 uatu.py setup` (`--import-voice` destila la voz por consola). Los comentarios que ya haya
+publicado UATU con tu cuenta también cuentan como historial: son tu voz.
+
 ## Uso diario
 
 ```bash
@@ -30,7 +59,9 @@ en primer plano que abra el navegador: `python3 server.py`.
    o *borrador listo*.
 2. **Revisar** encola la PR; un único hilo las procesa de una en una (1–4 min cada una).
    **Revisar pendientes** encola hasta `max_prs_per_run` de golpe.
-3. **Ver borrador** enseña cada comentario con el código señalado. Puedes editar el texto,
+3. **Ver borrador** abre con la tarjeta **Qué hace esta PR** (qué resuelve, qué toca, lo que la
+   descripción del autor no cuenta y, en un delta, qué cambió desde la última revisión) y después
+   enseña cada comentario con el código señalado. Puedes editar el texto,
    desmarcar los que no quieras publicar y tocar el resumen. **Guardar cambios** lo persiste.
 4. **Publicar** manda la review a GitHub (pide confirmación). **Descartar** no publica nada y
    da la PR por revisada hasta ese commit, igual que si no hubiera habido hallazgos.
@@ -77,10 +108,10 @@ publicar reviews con tu cuenta, así que sólo en redes de confianza. Las llamad
 
 | Decisión | Valor |
 |---|---|
-| Repos | gofre, tortilla (`config.json → repos`) |
+| Repos | gofre, tortilla por defecto (`config.json → repos`); cada uno elige los suyos en Setup |
 | Ejecución | a demanda desde la web local (`server.py`); no hay cron ni launchd |
 | Publicación | siempre manual, tras ver el borrador |
-| Identidad | usuario `anbillin` (gh ya autenticado) |
+| Identidad | quien ejecuta: su sesión de `gh`; usuario, nombre y voz en `profile/` |
 | PRs elegibles | abiertas, no draft, autor ≠ yo, autor ∉ bots |
 | Re-revisión | sólo el delta de commits desde la última revisión; si hubo force-push, la PR entera |
 | Tipo de review | los borradores salen siempre como `COMMENT`; `APPROVE` sólo a mano desde el botón «Aprobar», y nunca request-changes |
@@ -129,7 +160,11 @@ python3 uatu.py publish gofre 1640        # publica un borrador existente
 python3 uatu.py run --repo tortilla --max 2   # borradores para las pendientes, sin publicar
 python3 uatu.py replies gofre 1640        # respuestas a mis comentarios en esa PR
 python3 uatu.py approve gofre 1640 -m "LGTM"  # APPROVE, con las mismas condiciones que el botón
+python3 uatu.py setup                     # comprobaciones y estado del perfil
+python3 uatu.py setup --import-voice      # destila la voz del historial y pregunta antes de guardar
 ```
+
+Sin perfil completo, los demás comandos paran y remiten a `setup`.
 
 `status` añade `APROBADA` (con `*` si hubo commits después del approve) y el número de respuestas.
 
@@ -141,19 +176,30 @@ Log en `logs/uatu.log` (las últimas líneas también en la web, botón «Log»)
 
 ## Ajustes
 
-Todo en `config.json`. `claude.model` va fijado a `claude-fable-5-1`: en modo `-p`,
-Claude Code no respeta el `model` de `~/.claude/settings.json` y cae a Haiku si no se le
-pasa `--model` explícito (comprobado el 2026-11-04). `claude.max_budget_usd` sólo aplica
-si se factura por API.
+Dos capas. `config.json` (en git) son los **defaults del equipo**: organización, repos,
+autores excluidos, topes, `claude`, `praise` y Code Agreements. `profile/config.json` (fuera de
+git) es **lo personal**: `me`, `name` y cualquier clave de arriba que se quiera cambiar; Setup
+sólo guarda lo que difiere de los defaults, así que quien no toca un ajuste sigue los cambios del
+equipo. `uatu.load_config()` hace el merge y `reload_config()` lo recarga en caliente al guardar.
+
+`claude.model` va fijado a `claude-fable-5-1`: en modo `-p`, Claude Code no respeta el `model` de
+`~/.claude/settings.json` y cae a Haiku si no se le pasa `--model` explícito (comprobado el
+2026-11-04). `claude.max_budget_usd` sólo aplica si se factura por API.
 
 ## Voz de los comentarios
 
-Los comentarios salen con la cuenta de `anbillin` y el prompt les da su voz: cortos, en
-plural inclusivo («¿no podríamos…?»), muchas veces como pregunta, tuteo relajado, sin
-cabeceras ni etiquetas de severidad, con un bloque de código cuando se propone código.
-La sección «Voz» de `prompts/review-pr.md` lleva ejemplos reales de reviews anteriores
-sacados de GitHub; si el tono se desvía, se ajusta ahí y se comprueba con un borrador.
-En la web, además, cada comentario se puede retocar antes de publicarlo.
+Los comentarios salen con la cuenta de quien ejecuta y tienen que sonar a esa persona. La voz
+vive en `profile/voice.md`, con tres apartados: **ejemplos de comentarios** literales, **rasgos**
+(en qué persona habla, si pregunta o afirma, tuteo, emojis, cómo nombra las normas) y **elogios**.
+El prompt (`prompts/review-pr.md`) la inserta en `{{VOICE}}` y nombra al revisor con
+`{{REVIEWER_NAME}}`; lo que es común a todo el equipo (corto, empieza por el asunto, sin aparato,
+código cuando se propone código, sin cierres, y los ejemplos de Code Agreements) sigue en el
+prompt. `prompts/voice.example.md` es la voz de Alberto, de referencia para la forma.
+
+La voz se construye desde Setup: «Importar de GitHub» (`fetch_my_comments` + el prompt
+`prompts/voice-from-history.md`) y «Probar voz» (`prompts/voice-preview.md`). Si el tono se
+desvía, se ajusta el fichero de voz y se comprueba con la prueba o con un borrador; en la web,
+además, cada comentario se puede retocar antes de publicarlo.
 
 ### Elogios
 
@@ -165,6 +211,17 @@ claro»). `claude` lo propone en `praise` sólo cuando hay algo concreto que des
 por el que se incluyó o se apartó, y se puede marcar, desmarcar o reescribir. Se publica al
 principio del cuerpo de la review, nunca como comentario inline, y una review puede llevar
 sólo el elogio.
+
+### Qué hace la PR
+
+En la misma pasada de revisión, `claude` devuelve `explanation`: `what` (qué problema resuelve y
+cómo, en una o dos frases), `changes` (qué toca y para qué, de dos a cuatro puntos de una línea),
+`unmentioned` (lo que la PR hace y la descripción del autor no cuenta, sólo si importa) y `since_last` (en un delta, qué cambió
+desde la última revisión). Es **interno**: se guarda en el borrador, se enseña como tarjeta al
+abrirlo, su primera frase sale en gris bajo el título en la lista y la CLI `review` lo imprime, pero
+nunca llega a GitHub. Los borradores anteriores a esta pieza no lo tienen hasta que se vuelvan a
+revisar. El tono es el de un compañero contándotelo de pie junto a tu mesa, corto y coloquial; si
+sale verboso, se ajusta en la sección «Explicación para el revisor» del prompt.
 
 `severity` y `rule` siguen existiendo en la salida de `claude`, pero sólo para ordenar,
 recortar al tope y verlos en el borrador: no se publican.

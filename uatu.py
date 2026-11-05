@@ -11,21 +11,27 @@ Uso:
   uatu.py publish <repo> <pr>               # publica un borrador existente
   uatu.py replies <repo> <pr>               # respuestas a mis comentarios
   uatu.py approve <repo> <pr> [-m msg]      # APPROVE, sólo si ya está revisada al día
+  uatu.py setup [--import-voice]            # comprobaciones y perfil personal (profile/)
 """
 import argparse
 import collections
 import datetime as dt
 import fcntl
 import json
+import platform
 import random
 import re
+import shutil
 import subprocess
 import sys
 import threading
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-CONFIG = json.loads((ROOT / "config.json").read_text())
+CONFIG_FILE = ROOT / "config.json"            # defaults del equipo (en git)
+PROFILE_DIR = ROOT / "profile"                # lo personal de quien ejecuta (fuera de git)
+PROFILE_FILE = PROFILE_DIR / "config.json"    # sobrescribe claves de config.json y añade me/name
+VOICE_FILE = PROFILE_DIR / "voice.md"         # la voz: ejemplos, rasgos y elogios
 REPOS_DIR = ROOT / "repos"
 STATE_DIR = ROOT / "state"
 WORK_DIR = STATE_DIR / "work"
@@ -35,13 +41,14 @@ STATE_FILE = STATE_DIR / "reviewed.json"
 PRAISE_FILE = STATE_DIR / "praise.json"
 SEEN_FILE = STATE_DIR / "seen.json"   # última respuesta vista por PR, para marcar las nuevas
 PROMPT_FILE = ROOT / "prompts" / "review-pr.md"
+VOICE_EXAMPLE_FILE = ROOT / "prompts" / "voice.example.md"
+VOICE_IMPORT_PROMPT = ROOT / "prompts" / "voice-from-history.md"
+VOICE_PREVIEW_PROMPT = ROOT / "prompts" / "voice-preview.md"
 AGREEMENTS_FILE = ROOT / "prompts" / "code-agreements.json"
 # Ids de los Code Agreements, para que el esquema de salida sólo admita los que existen.
 AGREEMENT_IDS = [a["id"] for a in json.loads(AGREEMENTS_FILE.read_text())["agreements"]]
 
 MARKER_RE = re.compile(r"<!-- uatu sha=([0-9a-f]{7,40}) -->")
-ORG = CONFIG["github_org"]
-ME = CONFIG["me"]
 SEVERITY_ORDER = {"must": 0, "should": 1, "nit": 2}
 
 # Últimas líneas de log, para enseñarlas en la web.
@@ -53,6 +60,16 @@ FINDINGS_SCHEMA = {
     "properties": {
         "summary": {"type": "string"},
         "praise": {"type": "string"},
+        "explanation": {
+            "type": "object",
+            "properties": {
+                "what": {"type": "string"},
+                "changes": {"type": "array", "items": {"type": "string"}},
+                "unmentioned": {"type": "array", "items": {"type": "string"}},
+                "since_last": {"type": "string"},
+            },
+            "required": ["what", "changes", "unmentioned", "since_last"],
+        },
         "findings": {
             "type": "array",
             "items": {
@@ -70,12 +87,71 @@ FINDINGS_SCHEMA = {
             },
         },
     },
-    "required": ["summary", "praise", "findings"],
+    "required": ["summary", "praise", "explanation", "findings"],
 }
 
 
 class Skip(Exception):
     """La PR no se revisa esta vez; el mensaje dice por qué."""
+
+
+# ----------------------------------------------------------------- configuración
+
+# Claves que el perfil personal puede sobrescribir, además de `me` y `name`.
+PROFILE_KEYS = ("repos", "exclude_authors", "visible_signature", "max_prs_per_run",
+                "max_changed_lines", "max_findings", "praise", "claude", "code_agreements")
+
+
+def load_defaults() -> dict:
+    return json.loads(CONFIG_FILE.read_text())
+
+
+def load_profile() -> dict:
+    return json.loads(PROFILE_FILE.read_text()) if PROFILE_FILE.exists() else {}
+
+
+def load_config() -> dict:
+    """Defaults del equipo (config.json) con el perfil personal encima. El merge es por clave de
+    primer nivel; dentro de `claude`, `praise` y `code_agreements.scope` por subclave, para que el
+    perfil pueda cambiar un solo valor."""
+    cfg = load_defaults()
+    for key, val in load_profile().items():
+        if key in ("claude", "praise") and isinstance(val, dict):
+            cfg[key] = {**(cfg.get(key) or {}), **val}
+        elif key == "code_agreements" and isinstance(val, dict):
+            base = cfg.get(key) or {}
+            cfg[key] = {**base, **val, "scope": {**(base.get("scope") or {}), **(val.get("scope") or {})}}
+        else:
+            cfg[key] = val
+    cfg.setdefault("me", None)
+    cfg.setdefault("name", None)
+    return cfg
+
+
+def reload_config() -> None:
+    """Relee config.json y el perfil. Los globales se leen en cada llamada, así que basta con
+    reasignarlos (server.py los usa como `uatu.CONFIG`, `uatu.ME`)."""
+    global CONFIG, ORG, ME
+    CONFIG = load_config()
+    ORG = CONFIG["github_org"]
+    ME = CONFIG.get("me")
+
+
+def is_ready() -> bool:
+    """Hay perfil con usuario, al menos un repo y fichero de voz: se puede revisar."""
+    return bool(CONFIG.get("me")) and bool(CONFIG.get("repos")) and VOICE_FILE.exists()
+
+
+def reviewer_name() -> str:
+    return CONFIG.get("name") or CONFIG.get("me") or "el revisor"
+
+
+def load_voice() -> str:
+    return VOICE_FILE.read_text().strip() if VOICE_FILE.exists() else ""
+
+
+CONFIG, ORG, ME = {}, None, None
+reload_config()
 
 
 # ----------------------------------------------------------------- utilidades
@@ -179,6 +255,26 @@ def praise_text(draft: dict) -> str:
     return (pr.get("body") or "").strip() if pr.get("enabled") else ""
 
 
+def clean_explanation(raw) -> dict:
+    """La explicación interna de la PR, saneada: textos sin espacios sobrantes y listas sin vacíos."""
+    raw = raw if isinstance(raw, dict) else {}
+    items = lambda key: [str(x).strip() for x in (raw.get(key) or []) if str(x).strip()]
+    return {
+        "what": str(raw.get("what") or "").strip(),
+        "changes": items("changes"),
+        "unmentioned": items("unmentioned"),
+        "since_last": str(raw.get("since_last") or "").strip(),
+    }
+
+
+def explanation_gist(draft: dict) -> str:
+    """Primera frase de «qué hace», para la lista."""
+    what = (draft.get("explanation") or {}).get("what", "")
+    # Corta en el primer punto seguido de mayúscula (o fin), para no partir «p. ej.».
+    match = re.match(r".+?[.!?](?=\s+[A-ZÁÉÍÓÚÑ¿¡«(]|$)", what, re.S)
+    return (match.group(0) if match else what).strip()
+
+
 def enabled_comments(draft: dict) -> list:
     return [c for c in draft["comments"] if c.get("enabled", True) and c["body"].strip()]
 
@@ -195,6 +291,7 @@ def draft_summary(draft: dict, head: str) -> dict:
         "stale": draft["head"] != head,
         "cost_usd": draft.get("claude", {}).get("cost_usd"),
         "praise": bool(praise_text(draft)),
+        "gist": explanation_gist(draft),
     }
 
 
@@ -568,6 +665,7 @@ def render_prompt(pr: dict, head: str, diff_file: Path, delta_file: Path, mode: 
         "{{MODE_EXPLANATION}}": mode_expl, "{{MAX_FINDINGS}}": str(CONFIG["max_findings"]),
         "{{CODE_AGREEMENTS}}": render_agreements(pr["repo"]),
         "{{CODE_AGREEMENTS_URL}}": (CONFIG.get("code_agreements") or {}).get("url", ""),
+        "{{REVIEWER_NAME}}": reviewer_name(), "{{VOICE}}": load_voice(),
     }
     text = PROMPT_FILE.read_text()
     for k, v in repl.items():
@@ -665,6 +763,17 @@ def print_draft(draft: dict) -> None:
     """Enseña un borrador por consola, con el código señalado."""
     sep = "=" * 72
     print(f"\n{sep}\n{draft['repo']}#{draft['number']} · {draft['title']}\n{draft['url']}\n{sep}")
+    ex = draft.get("explanation") or {}
+    if ex.get("what"):
+        print(f"\nQUÉ HACE (interno, no se publica)\n{ex['what']}")
+        for line in ex.get("changes") or []:
+            print(f"  - {line}")
+        if ex.get("unmentioned"):
+            print("  Lo que la descripción no cuenta:")
+            for line in ex["unmentioned"]:
+                print(f"  - {line}")
+        if ex.get("since_last"):
+            print(f"  Desde la última revisión: {ex['since_last']}")
     if praise_text(draft):
         print(f"\nELOGIO\n{praise_text(draft)}")
     elif (draft.get("praise") or {}).get("body"):
@@ -747,6 +856,7 @@ def make_draft(pr: dict, force_full: bool = False) -> dict:
         "mode": mode, "last_sha": last_sha, "lines_changed": changed,
         "created_at": now(), "status": "pending",
         "summary": (result.get("summary") or "").strip(),
+        "explanation": clean_explanation(result.get("explanation")),
         "praise": None,
         "comments": comments, "claude": meta,
     }
@@ -807,6 +917,253 @@ def pending_rows(rows: list) -> list:
             continue
         out.append(r)
     return out
+
+
+# ----------------------------------------------------------------- setup
+
+def check(name: str, ok, detail: str) -> dict:
+    return {"name": name, "ok": bool(ok), "detail": detail}
+
+
+def gh_user():
+    """Login y nombre de pila de la sesión de gh, o None si no hay sesión."""
+    try:
+        u = gh_json(["api", "user"])
+        return {"login": u["login"], "name": (u.get("name") or "").split(" ")[0]}
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def run_checks() -> list:
+    """Lo que hace falta en el Mac de quien ejecuta: python, gh con sesión y claude."""
+    checks = [check("python3", sys.version_info >= (3, 9), platform.python_version())]
+    if not shutil.which("gh"):
+        checks.append(check("gh", False, "no está en el PATH: brew install gh"))
+    else:
+        user = gh_user()
+        checks.append(check("gh", user, f"sesión de {user['login']}" if user else "sin sesión: gh auth login"))
+    if not shutil.which("claude"):
+        checks.append(check("claude", False, "no está en el PATH: instala Claude Code"))
+    else:
+        res = subprocess.run(["claude", "--version"], text=True, capture_output=True)
+        checks.append(check("claude", res.returncode == 0, (res.stdout or res.stderr).strip()[:80]))
+    return checks
+
+
+def check_repo_access(repo: str) -> dict:
+    """Acceso SSH al repo, que es lo que usa el clon."""
+    try:
+        res = subprocess.run(["git", "ls-remote", f"git@github.com:{ORG}/{repo}.git", "HEAD"],
+                             text=True, capture_output=True, timeout=30)
+    except subprocess.TimeoutExpired:
+        return check(repo, False, "sin respuesta en 30 s")
+    if res.returncode == 0:
+        return check(repo, True, "acceso SSH ok")
+    err = [l.strip() for l in res.stderr.splitlines() if l.strip()]
+    first = next((l for l in err if l.startswith(("ERROR", "fatal"))), err[0] if err else "sin acceso")
+    return check(repo, False, first[:160])
+
+
+def list_org_repos() -> list:
+    repos = gh_json(["repo", "list", ORG, "--limit", "200", "--json", "name,isArchived"]) or []
+    return sorted(r["name"] for r in repos if not r.get("isArchived"))
+
+
+def fetch_my_comments(me=None, repos=None, limit: int = 150) -> list:
+    """Mis comentarios recientes en PRs de los repos: inline (sobre código) y de conversación
+    (donde suelen caer los elogios). Es la materia prima para destilar la voz. Los que ya publicó
+    UATU también entran: son la misma voz."""
+    me, repos = me or ME, repos or CONFIG["repos"]
+    quota = max(30, limit // max(1, len(repos)))
+    out, seen = [], set()
+
+    def keep(body):
+        b = (body or "").strip()
+        if not b or len(b) > 600 or MARKER_RE.search(b):
+            return None
+        if len(re.sub(r"https?://\S+", "", b).strip()) < 4:  # sólo un enlace
+            return None
+        return b
+
+    for repo in repos:
+        got = 0
+        for endpoint, pages in ((f"repos/{ORG}/{repo}/pulls/comments", 5),
+                                (f"repos/{ORG}/{repo}/issues/comments", 2)):
+            for page in range(1, pages + 1):
+                items = gh_json(["api", f"{endpoint}?sort=created&direction=desc&per_page=100&page={page}"]) or []
+                for it in items:
+                    if (it.get("user") or {}).get("login") != me:
+                        continue
+                    body = keep(it.get("body"))
+                    if not body or body in seen:
+                        continue
+                    seen.add(body)
+                    got += 1
+                    out.append({"repo": repo, "kind": "inline" if "pull_request_review_id" in it else "conversation",
+                                "path": it.get("path"), "body": body, "at": it.get("created_at")})
+                if len(items) < 100 or got >= quota:
+                    break
+            if got >= quota:
+                break
+    log(f"voz: {len(out)} comentarios de {me} en {', '.join(repos)}")
+    return out
+
+
+def run_claude_text(prompt: str, label: str):
+    """`claude -p` sin herramientas ni contexto de repo: para redactar, no para revisar.
+    Devuelve (texto, metadatos)."""
+    ccfg = CONFIG["claude"]
+    WORK_DIR.mkdir(parents=True, exist_ok=True)
+    cmd = ["claude", "-p", prompt, "--output-format", "json", "--tools", "",
+           "--permission-mode", "dontAsk", "--strict-mcp-config", "--no-session-persistence",
+           "--max-turns", "2", "--max-budget-usd", str(ccfg["max_budget_usd"])]
+    if ccfg.get("model"):
+        cmd += ["--model", ccfg["model"]]
+    log(f"  claude redactando {label} ...")
+    res = subprocess.run(cmd, cwd=WORK_DIR, text=True, capture_output=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"claude salió con {res.returncode}: {res.stderr.strip()[:2000]}")
+    data = json.loads(res.stdout)
+    if data.get("is_error"):
+        raise RuntimeError(f"claude devolvió error: {data.get('result')}")
+    text = (data.get("result") or "").strip()
+    text = re.sub(r"^```[a-zA-Z]*\n|\n```$", "", text).strip()
+    meta = {"turns": data.get("num_turns"), "cost_usd": round(data.get("total_cost_usd", 0) or 0, 2),
+            "model": ccfg.get("model")}
+    log(f"  claude terminó {label}: {meta['cost_usd']:.2f} USD")
+    return text, meta
+
+
+def import_voice(me=None, name=None, repos=None) -> dict:
+    """Destila la voz del historial de GitHub. Devuelve el markdown propuesto, sin guardarlo:
+    lo revisa la persona y lo guarda desde Setup (o `setup --import-voice`)."""
+    me = me or ME
+    comments = fetch_my_comments(me, repos)
+    prompt = (VOICE_IMPORT_PROMPT.read_text()
+              .replace("{{REVIEWER_NAME}}", name or reviewer_name()).replace("{{ME}}", me or "")
+              .replace("{{VOICE_EXAMPLE}}", VOICE_EXAMPLE_FILE.read_text().strip())
+              .replace("{{COMMENTS}}", json.dumps(comments, ensure_ascii=False, indent=1)))
+    text, meta = run_claude_text(prompt, f"la voz de {me}")
+    return {"voice": text, "comments": len(comments), **meta}
+
+
+def preview_voice(voice: str, name=None) -> dict:
+    """Cuatro hallazgos fijos redactados con esa voz: para probar el tono sin una revisión real."""
+    prompt = (VOICE_PREVIEW_PROMPT.read_text()
+              .replace("{{REVIEWER_NAME}}", name or reviewer_name()).replace("{{VOICE}}", voice.strip()))
+    text, meta = run_claude_text(prompt, "la prueba de voz")
+    return {"preview": text, **meta}
+
+
+def clean_profile(raw: dict) -> dict:
+    """Normaliza y valida lo que llega de Setup. Devuelve el perfil a guardar, sólo con lo que
+    difiere de los defaults del equipo: quien no toca un ajuste sigue los cambios de config.json.
+    Lanza ValueError con el primer problema."""
+    d = load_defaults()
+    out = {}
+    me = str(raw.get("me") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", me):
+        raise ValueError("usuario de GitHub inválido")
+    out["me"] = me
+    out["name"] = str(raw.get("name") or "").strip() or me
+
+    def number(value, kind, key, lo=None, hi=None):
+        try:
+            v = kind(value)
+        except (TypeError, ValueError):
+            raise ValueError(f"{key} debe ser un número")
+        if (lo is not None and v < lo) or (hi is not None and v > hi):
+            raise ValueError(f"{key} fuera de rango")
+        return v
+
+    def given(value):
+        return value not in (None, "")
+
+    if "repos" in raw:
+        repos = [str(r).strip() for r in (raw.get("repos") or []) if str(r).strip()]
+        if not repos:
+            raise ValueError("elige al menos un repo")
+        if repos != d.get("repos"):
+            out["repos"] = repos
+    if "exclude_authors" in raw:
+        ex = [str(a).strip() for a in (raw.get("exclude_authors") or []) if str(a).strip()]
+        if ex != d.get("exclude_authors"):
+            out["exclude_authors"] = ex
+    if "visible_signature" in raw:
+        sig = str(raw.get("visible_signature") or "").strip() or None
+        if sig != d.get("visible_signature"):
+            out["visible_signature"] = sig
+    for key in ("max_prs_per_run", "max_changed_lines", "max_findings"):
+        if given(raw.get(key)):
+            v = number(raw[key], int, key, lo=1)
+            if v != d.get(key):
+                out[key] = v
+    praise, pr = raw.get("praise") or {}, {}
+    if given(praise.get("rate")):
+        v = number(praise["rate"], float, "praise.rate", lo=0, hi=1)
+        if v != d["praise"]["rate"]:
+            pr["rate"] = v
+    if given(praise.get("cooldown_days")):
+        v = number(praise["cooldown_days"], int, "praise.cooldown_days", lo=0)
+        if v != d["praise"]["cooldown_days"]:
+            pr["cooldown_days"] = v
+    if pr:
+        out["praise"] = pr
+    claude, cl = raw.get("claude") or {}, {}
+    model = str(claude.get("model") or "").strip()
+    if model and model != d["claude"]["model"]:
+        cl["model"] = model
+    if given(claude.get("max_turns")):
+        v = number(claude["max_turns"], int, "claude.max_turns", lo=1)
+        if v != d["claude"]["max_turns"]:
+            cl["max_turns"] = v
+    if given(claude.get("max_budget_usd")):
+        v = number(claude["max_budget_usd"], float, "claude.max_budget_usd", lo=0.1)
+        if v != d["claude"]["max_budget_usd"]:
+            cl["max_budget_usd"] = v
+    if cl:
+        out["claude"] = cl
+    scope = (raw.get("code_agreements") or {}).get("scope")
+    if isinstance(scope, dict):
+        default_scope = (d.get("code_agreements") or {}).get("scope") or {}
+        changed = {}
+        for repo, val in scope.items():
+            val = val or None
+            if val not in (None, "front", "back"):
+                raise ValueError(f"ámbito inválido para {repo}")
+            if default_scope.get(repo) != val:
+                changed[repo] = val
+        if changed:
+            out["code_agreements"] = {"scope": changed}
+    return out
+
+
+def save_profile(profile: dict, voice=None) -> None:
+    """Escribe profile/config.json (ya limpio) y, si se pasa, profile/voice.md; recarga la config.
+    Una voz vacía borra el fichero: sin voz no se revisa."""
+    PROFILE_DIR.mkdir(exist_ok=True)
+    PROFILE_FILE.write_text(json.dumps(profile, indent=2, ensure_ascii=False) + "\n")
+    if voice is not None:
+        if voice.strip():
+            VOICE_FILE.write_text(voice.strip() + "\n")
+        elif VOICE_FILE.exists():
+            VOICE_FILE.unlink()
+    reload_config()
+    log(f"perfil guardado: {profile['me']} ({profile['name']}), voz {'sí' if VOICE_FILE.exists() else 'NO'}")
+
+
+def setup_snapshot() -> dict:
+    """Lo que la vista Setup necesita: defaults, perfil, config efectiva, voz y ejemplo."""
+    missing = []
+    if not CONFIG.get("me"):
+        missing.append("usuario")
+    if not CONFIG.get("repos"):
+        missing.append("repos")
+    if not VOICE_FILE.exists():
+        missing.append("voz")
+    return {"ready": is_ready(), "missing": missing, "defaults": load_defaults(), "profile": load_profile(),
+            "effective": CONFIG, "voice": load_voice(), "voice_example": VOICE_EXAMPLE_FILE.read_text(),
+            "profile_dir": str(PROFILE_DIR)}
 
 
 # ----------------------------------------------------------------- comandos
@@ -875,6 +1232,31 @@ def cmd_replies(args) -> None:
           + (f" · {'se puede aprobar' if conv['can_approve'] else conv['approve_blocked']}"))
 
 
+def cmd_setup(args) -> None:
+    """Comprobaciones del entorno y estado del perfil; con --import-voice, destila la voz."""
+    for c in run_checks():
+        print(f"  {'✓' if c['ok'] else '✗'} {c['name']:<8} {c['detail']}")
+    for repo in CONFIG.get("repos") or []:
+        c = check_repo_access(repo)
+        print(f"  {'✓' if c['ok'] else '✗'} {ORG}/{repo:<14} {c['detail']}")
+    snap = setup_snapshot()
+    print(f"\nperfil ({PROFILE_FILE}): {'listo' if snap['ready'] else 'incompleto, falta ' + ', '.join(snap['missing'])}")
+    print(f"  usuario {ME or '-'} · nombre {CONFIG.get('name') or '-'} · repos {', '.join(CONFIG.get('repos') or []) or '-'}")
+    print(f"  voz: {VOICE_FILE} ({'existe' if VOICE_FILE.exists() else 'no existe'})")
+    if not args.import_voice:
+        return
+    if not ME:
+        sys.exit("hace falta `me` en profile/config.json para importar la voz (o hazlo desde la web)")
+    res = import_voice()
+    print(f"\n{res['voice']}\n\n{res['comments']} comentarios · {res['cost_usd']:.2f} USD")
+    if not args.yes and input(f"¿Escribir en {VOICE_FILE}? [s/N] ").strip().lower() not in ("s", "si", "sí", "y"):
+        print("no se guarda")
+        return
+    PROFILE_DIR.mkdir(exist_ok=True)
+    VOICE_FILE.write_text(res["voice"].strip() + "\n")
+    print(f"guardado en {VOICE_FILE}")
+
+
 def cmd_status(args) -> None:
     labels = {"al-dia": "al día", "nuevos-commits": "nuevos commits", "pendiente": "pendiente"}
     for r in overview():
@@ -921,7 +1303,13 @@ def main() -> None:
     p.set_defaults(fn=cmd_replies)
     p = sub.add_parser("status", help="muestra el estado de cada PR candidata (APROBADA* = commits después del approve)")
     p.set_defaults(fn=cmd_status)
+    p = sub.add_parser("setup", help="comprueba el entorno y el perfil personal (profile/)")
+    p.add_argument("--import-voice", action="store_true", help="destila la voz de mis comentarios en GitHub")
+    p.add_argument("-y", "--yes", action="store_true", help="guarda la voz sin preguntar")
+    p.set_defaults(fn=cmd_setup)
     args = ap.parse_args()
+    if args.cmd != "setup" and not is_ready():
+        sys.exit("UATU no está configurado: ejecuta `python3 uatu.py setup` o abre la web y completa Setup")
     args.fn(args)
 
 

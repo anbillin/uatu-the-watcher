@@ -126,6 +126,14 @@
   td.num { font-family: var(--mono); white-space: nowrap; }
   td .title { font-weight: 500; }
   td .meta { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  td .gist { color: var(--muted); font-size: 12.5px; margin-top: 3px; font-style: italic;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .explain { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 10px; background: var(--card-2); font-size: 14px; line-height: 1.5; }
+  .explain .what { margin: 0; }
+  .explain ul { margin: 8px 0 0; padding-left: 20px; }
+  .explain li { margin: 3px 0; }
+  .explain .sub { margin-top: 10px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .explain code { font-size: 12.5px; }
   td.actions { white-space: nowrap; }
   /* set de botones vertical: todos del mismo ancho, los enlaces debajo */
   .btnset { display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: 100%; }
@@ -192,6 +200,33 @@
   .approve-box .row { display: flex; gap: 10px; align-items: flex-start; margin-top: 10px; }
   .approve-box .row input { flex: 1; font: 13px var(--mono); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); min-height: 34px; }
   .approve-box .row input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
+  /* ---------- setup: quién eres y cómo suenas ---------- */
+  .setup .card .body { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px 16px; }
+  .setup .field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+  .setup .field label { color: var(--muted); font-size: 12px; }
+  .setup .hint { color: var(--muted); font-size: 11px; }
+  .setup input[type=text], .setup input[type=number], .setup select { font: 13px var(--mono); padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--ink); min-height: 34px; width: 100%; }
+  .setup input:focus, .setup select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow); }
+  .setup input::placeholder { color: var(--muted); opacity: .8; }
+  .setup .wide { grid-column: 1 / -1; }
+  .setup ul.checks { list-style: none; margin: 0; padding: 0; font-size: 13px; }
+  .setup ul.checks li { padding: 4px 0; display: flex; gap: 8px; align-items: baseline; }
+  .setup ul.checks li b { font-weight: 600; min-width: 64px; font-family: var(--mono); }
+  .setup ul.checks li.ok::before { content: "✓"; color: var(--ok); font-weight: 700; }
+  .setup ul.checks li.bad::before { content: "✗"; color: var(--bad); font-weight: 700; }
+  .setup .repo-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line-2); font-size: 13px; }
+  .setup .repo-row:first-child { border-top: none; }
+  .setup .repo-row label { flex: 1; cursor: pointer; font-family: var(--mono); }
+  .setup .repo-row select { width: auto; min-height: 30px; padding: 4px 8px; }
+  .setup .repo-row .access { font-size: 12px; color: var(--muted); }
+  .setup textarea.voice { min-height: 340px; overflow: auto; font-size: 12.5px; }
+  .setup details { margin-top: 8px; font-size: 13px; }
+  .setup details summary { cursor: pointer; color: var(--accent); }
+  .setup details pre { white-space: pre-wrap; font: 12px/1.5 var(--mono); color: var(--muted); background: var(--bg); border: 1px solid var(--line-2); border-radius: 8px; padding: 10px; max-height: 360px; overflow: auto; }
+  .setup .preview { margin-top: 6px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 8px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; background: var(--bg); }
+  .setup .preview pre { margin: 6px 0; padding: 8px 10px; border-radius: 8px; background: var(--card); border: 1px solid var(--line-2); font: 12px/1.5 var(--mono); overflow-x: auto; white-space: pre; }
+  .setup .preview code { font: 12px var(--mono); background: color-mix(in srgb, var(--muted) 12%, transparent); padding: 1px 4px; border-radius: 4px; }
   pre.log { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; font: 12px/1.5 var(--mono);
             max-height: 320px; overflow: auto; white-space: pre-wrap; color: var(--muted); }
   .oath { margin: 40px auto 0; text-align: center; color: var(--muted); font: italic 12px/1.5 var(--display); letter-spacing: .04em; opacity: .8; }
@@ -278,13 +313,15 @@
   <button id="btn-refresh" onclick="refresh(true)">Actualizar</button>
   <button id="btn-review-all" onclick="reviewAll()">Revisar pendientes</button>
   <button onclick="toggleLog()">Log</button>
+  <button onclick="openSetup()" title="Quién eres y cómo suenas">Setup</button>
 </header>
 <main id="main"></main>
 <div class="toast" id="toast"></div>
 
 <script>
 const S = { prs: [], jobs: {}, config: {}, generatedAt: null, error: null,
-            view: 'list', draft: null, conv: null, showLog: false, showApproved: false, logLines: [], timer: null };
+            view: 'list', draft: null, conv: null, showLog: false, showApproved: false, logLines: [], timer: null,
+            ready: true, setup: null, setupTimer: null, setupConsumed: null };
 
 // ------------------------------------------------------------ util
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -319,9 +356,11 @@ async function refresh(force) {
   const b = document.getElementById('btn-refresh'); b.disabled = true;
   try {
     const d = await api('GET', '/api/prs' + (force ? '?refresh=1' : ''));
-    Object.assign(S, { prs: d.prs, jobs: d.jobs, config: d.config, generatedAt: d.generated_at, error: null });
+    Object.assign(S, { prs: d.prs, jobs: d.jobs, config: d.config, generatedAt: d.generated_at, error: null, ready: d.ready !== false });
   } catch (e) { S.error = e.message; }
   finally { b.disabled = false; }
+  // Sin perfil completo no hay lista: todo pasa por Setup.
+  if (!S.ready) { if (S.view !== 'setup') openSetup(true); return; }
   if (S.showLog) await loadLog();
   render(); schedule();
 }
@@ -438,18 +477,190 @@ function updateCount() {
 }
 async function toggleLog() { S.showLog = !S.showLog; if (S.showLog) await loadLog(); render(true); }
 
+// ------------------------------------------------------------ setup
+const $ = id => document.getElementById(id);
+const str = v => v == null ? '' : String(v);
+// El formulario trabaja sobre una copia (S.setup.form): los números sólo llevan lo que el perfil
+// sobrescribe (los defaults del equipo van de placeholder); repos, ámbitos y excluidos, lo efectivo.
+function formFromProfile(s) {
+  const p = s.profile || {}, eff = s.effective || {}, gh = s.gh_user || {}, pp = p.praise || {}, pc = p.claude || {};
+  return { profile: {
+      me: p.me || gh.login || '', name: p.name || gh.name || '',
+      repos: eff.repos || [], exclude_authors: eff.exclude_authors || [],
+      visible_signature: str(p.visible_signature), max_prs_per_run: str(p.max_prs_per_run),
+      max_changed_lines: str(p.max_changed_lines), max_findings: str(p.max_findings),
+      praise: { rate: str(pp.rate), cooldown_days: str(pp.cooldown_days) },
+      claude: { model: str(pc.model), max_turns: str(pc.max_turns), max_budget_usd: str(pc.max_budget_usd) },
+      code_agreements: { scope: { ...((eff.code_agreements || {}).scope || {}) } } },
+    voice: s.voice || '' };
+}
+function setupForm() {
+  const v = id => $(id).value.trim();
+  const repos = [...document.querySelectorAll('.setup input[data-repo]')].filter(i => i.checked).map(i => i.dataset.repo);
+  const scope = {}; document.querySelectorAll('.setup select[data-scope]').forEach(s => { scope[s.dataset.scope] = s.value || null; });
+  return { profile: {
+      me: v('f-me'), name: v('f-name'), repos,
+      exclude_authors: v('f-exclude').split(',').map(s => s.trim()).filter(Boolean),
+      visible_signature: v('f-signature'), max_prs_per_run: v('f-max-prs'), max_changed_lines: v('f-max-lines'), max_findings: v('f-max-findings'),
+      praise: { rate: v('f-praise-rate'), cooldown_days: v('f-praise-cooldown') },
+      claude: { model: v('f-model'), max_turns: v('f-max-turns'), max_budget_usd: v('f-budget') },
+      code_agreements: { scope } },
+    voice: $('f-voice').value };
+}
+function syncSetupForm() { if ($('f-me')) S.setup.form = setupForm(); }
+function rerenderSetup() { syncSetupForm(); render(true); }
+function applySetupJob() {
+  // El resultado de una tarea acabada se aplica una sola vez (aunque se vuelva a abrir Setup).
+  const job = S.setup.job;
+  if (!job || job.status !== 'done' || S.setupConsumed === job.started_at) return;
+  S.setupConsumed = job.started_at;
+  if (job.kind === 'import') {
+    S.setup.form.voice = job.result.voice;
+    toast(`Voz propuesta a partir de ${job.result.comments} comentarios (${job.result.cost_usd.toFixed(2)} USD). Revísala y pulsa Guardar.`);
+  }
+  if (job.kind === 'preview') S.setup.preview = job.result;
+}
+async function openSetup(firstRun) {
+  try {
+    const s = await api('GET', '/api/setup');
+    S.setup = { ...s, firstRun: !!firstRun, form: formFromProfile(s), preview: S.setup && S.setup.preview };
+    applySetupJob();
+    S.view = 'setup'; history.replaceState(null, '', '#setup'); render(true); window.scrollTo(0, 0);
+    if (s.job && s.job.status === 'running') scheduleSetupPoll();
+  } catch (e) { toast(e.message, true); }
+}
+async function saveSetup() {
+  syncSetupForm();
+  try {
+    const s = await api('PUT', '/api/setup', S.setup.form);
+    Object.assign(S.setup, s, { firstRun: false, form: formFromProfile(s) });
+    toast(s.ready ? 'Perfil guardado' : `Guardado, pero falta: ${s.missing.join(', ')}`, !s.ready);
+    render(true);
+    if (s.ready) refresh(true);  // la lista depende de repos y usuario
+  } catch (e) { toast(e.message, true); }
+}
+async function runChecks() {
+  syncSetupForm();
+  const b = $('btn-checks'); b.disabled = true; b.textContent = 'Comprobando…';
+  try { Object.assign(S.setup, await api('POST', '/api/setup/checks', { repos: S.setup.form.profile.repos })); render(true); }
+  catch (e) { toast(e.message, true); b.disabled = false; b.textContent = 'Comprobar'; }
+}
+async function importVoice() {
+  syncSetupForm();
+  const f = S.setup.form.profile;
+  if (!f.me) return toast('Pon tu usuario de GitHub primero', true);
+  if (!f.repos.length) return toast('Elige al menos un repo', true);
+  if (S.setup.form.voice.trim() && !confirm('Ya hay una voz escrita. Importar la sustituye en el editor (no se guarda hasta que pulses Guardar). ¿Seguimos?')) return;
+  try {
+    const d = await api('POST', '/api/setup/voice/import', { me: f.me, name: f.name, repos: f.repos });
+    S.setup.job = d.job; render(true); scheduleSetupPoll();
+  } catch (e) { toast(e.message, true); }
+}
+async function previewVoice() {
+  syncSetupForm();
+  if (!S.setup.form.voice.trim()) return toast('La voz está vacía', true);
+  try {
+    const d = await api('POST', '/api/setup/voice/preview', { voice: S.setup.form.voice, name: S.setup.form.profile.name });
+    S.setup.job = d.job; S.setup.preview = null; render(true); scheduleSetupPoll();
+  } catch (e) { toast(e.message, true); }
+}
+function scheduleSetupPoll() { clearTimeout(S.setupTimer); S.setupTimer = setTimeout(pollSetup, 3000); }
+async function pollSetup() {
+  if (S.view !== 'setup') return;
+  try {
+    const s = await api('GET', '/api/setup');
+    S.setup.job = s.job;
+    if (s.job && s.job.status === 'running') { const el = $('setup-job'); if (el) el.innerHTML = jobLine(s.job); scheduleSetupPoll(); return; }
+    if (s.job && s.job.status === 'error') toast(s.job.error, true);
+    syncSetupForm(); applySetupJob(); render(true);
+  } catch (e) { scheduleSetupPoll(); }
+}
+function jobLine(job) {
+  if (!job) return '';
+  const what = job.kind === 'import' ? 'tu voz, a partir de tus comentarios en GitHub' : 'la prueba de voz';
+  if (job.status === 'running') return `<span class="pill busy accent">Claude está redactando ${what}… suele tardar medio minuto</span>`;
+  if (job.status === 'error') return `<span class="pill bad">Falló: ${esc(job.error)}</span>`;
+  return `<span class="pill ok">${job.kind === 'import' ? 'Voz importada' : 'Prueba lista'} · ${job.result.cost_usd.toFixed(2)} USD · ${esc(job.finished_at)}</span>`;
+}
+
+function renderSetup() {
+  const s = S.setup, f = s.form, p = f.profile, d = s.defaults, dp = d.praise || {}, dc = d.claude || {}, gh = s.gh_user;
+  const repoNames = [...new Set([...(s.org_repos || []), ...(d.repos || []), ...p.repos])].sort();
+  const access = Object.fromEntries((s.access || []).map(a => [a.name, a]));
+  const scopeOf = r => (p.code_agreements.scope || {})[r] || '';
+  const num = (id, label, val, def, hint, step) => `<div class="field"><label for="${id}">${label}</label>
+      <input type="number" id="${id}" value="${esc(val)}" placeholder="${esc(def)}" min="0" ${step ? `step="${step}"` : ''}><span class="hint">${hint || `por defecto ${esc(def)}`}</span></div>`;
+  const text = (id, label, val, ph, hint, wide) => `<div class="field ${wide ? 'wide' : ''}"><label for="${id}">${label}</label>
+      <input type="text" id="${id}" value="${esc(val)}" placeholder="${esc(ph || '')}">${hint ? `<span class="hint">${hint}</span>` : ''}</div>`;
+  const bar = (title, rule, extra) => `<div class="bar"><span class="path" style="font-family:inherit">${title}</span><span class="rule" style="flex:1">${rule}</span>${extra || ''}</div>`;
+  return `
+    ${s.ready ? `<button class="link" onclick="backToList()">← Volver a la lista</button>` : ''}
+    <div class="setup">
+    <div class="draft-head" style="margin-top:10px">
+      <h2>Setup · quién eres y cómo suenas</h2>
+      <div class="meta"><span>tu perfil vive en <code>${esc(s.profile_dir)}</code>, fuera de git</span><span>los valores del equipo, en <code>config.json</code></span></div>
+      ${!s.ready ? `<div class="banner warn">${s.firstRun ? 'Primera vez por aquí. ' : ''}UATU no revisa nada hasta que el perfil esté completo. Falta: ${esc((s.missing || []).join(', '))}.</div>` : ''}
+    </div>
+
+    <div class="card">${bar('1 · Identidad y comprobaciones', 'las reviews salen con la cuenta de gh de este Mac', '<button id="btn-checks" onclick="runChecks()">Comprobar</button>')}
+      <div class="body">
+        ${text('f-me', 'Usuario de GitHub', p.me, gh ? gh.login : 'login', 'para saber qué PRs son tuyas y leer tus reviews')}
+        ${text('f-name', 'Nombre de pila', p.name, gh ? gh.name : '', 'así te nombra el prompt cuando escribe en tu voz')}
+        <div class="wide"><ul class="checks">${(s.checks || []).map(c => `<li class="${c.ok ? 'ok' : 'bad'}"><b>${esc(c.name)}</b>${esc(c.detail)}</li>`).join('') || '<li>sin comprobar</li>'}</ul></div>
+      </div></div>
+
+    <div class="card">${bar('2 · Repos', 'qué observa UATU y qué Code Agreements aplica a cada uno (front o back)')}
+      <div class="body"><div class="wide">
+        ${repoNames.map(r => `<div class="repo-row"><input type="checkbox" id="r-${esc(r)}" data-repo="${esc(r)}" ${p.repos.includes(r) ? 'checked' : ''}><label for="r-${esc(r)}">${esc(d.github_org)}/${esc(r)}</label>
+            <select data-scope="${esc(r)}"><option value="" ${scopeOf(r) === '' ? 'selected' : ''}>sin ámbito</option><option value="front" ${scopeOf(r) === 'front' ? 'selected' : ''}>front</option><option value="back" ${scopeOf(r) === 'back' ? 'selected' : ''}>back</option></select>
+            ${access[r] ? `<span class="access" style="color:var(--${access[r].ok ? 'ok' : 'bad'})">${esc(access[r].detail)}</span>` : '<span class="access">SSH sin comprobar</span>'}</div>`).join('')}
+        ${!(s.org_repos || []).length ? `<div class="hint" style="margin-top:6px">No se pudo listar los repos de la organización (hace falta sesión de gh): salen los configurados.</div>` : ''}
+        </div>
+        ${text('f-exclude', 'Autores excluidos', p.exclude_authors.join(', '), '', 'bots y cuentas cuyas PRs no se revisan, separados por comas', true)}
+      </div></div>
+
+    <div class="card">${bar('3 · Voz', 'ejemplos, rasgos y elogios: lo que hace que los comentarios suenen a ti', '<button onclick="importVoice()">Importar de GitHub</button><button onclick="previewVoice()">Probar voz</button>')}
+      <div class="body"><div class="wide">
+        <div id="setup-job" style="min-height:22px;margin-bottom:8px">${jobLine(s.job)}</div>
+        <textarea id="f-voice" class="voice" placeholder="Pulsa «Importar de GitHub» para partir de tus comentarios reales, o escribe aquí siguiendo la forma del ejemplo.">${esc(f.voice)}</textarea>
+        <details><summary>Ver el ejemplo (la voz de otra persona del equipo: copia la forma, no el contenido)</summary><pre>${esc(s.voice_example)}</pre></details>
+        ${s.preview ? `<label class="rule" style="display:block;margin-top:14px;color:var(--muted);font-size:12px">Así sonarían cuatro comentarios con esta voz · ${s.preview.cost_usd.toFixed(2)} USD</label><div class="preview">${md(s.preview.preview)}</div>` : ''}
+      </div></div></div>
+
+    <div class="card">${bar('4 · Elogios, firma, topes y modelo', 'en blanco = el valor del equipo')}
+      <div class="body">
+        ${num('f-praise-rate', 'Probabilidad de elogio', p.praise.rate, dp.rate, 'de 0 a 1; el resto de veces el elogio queda apartado y lo marcas a mano', '0.05')}
+        ${num('f-praise-cooldown', 'Días entre elogios a la misma persona', p.praise.cooldown_days, dp.cooldown_days)}
+        ${text('f-signature', 'Firma visible al pie de la review', p.visible_signature, d.visible_signature || 'ninguna', 'p. ej. «Revisado con UATU»; vacío = sin firma')}
+        ${num('f-max-prs', 'PRs por «Revisar pendientes»', p.max_prs_per_run, d.max_prs_per_run)}
+        ${num('f-max-lines', 'Líneas cambiadas máximas por PR', p.max_changed_lines, d.max_changed_lines)}
+        ${num('f-max-findings', 'Comentarios máximos por review', p.max_findings, d.max_findings)}
+        ${text('f-model', 'Modelo de claude', p.claude.model, dc.model, 'en modo -p hay que pasarlo explícito o cae a Haiku')}
+        ${num('f-max-turns', 'Turnos máximos por revisión', p.claude.max_turns, dc.max_turns)}
+        ${num('f-budget', 'Presupuesto máximo por revisión (USD)', p.claude.max_budget_usd, dc.max_budget_usd, null, '0.5')}
+      </div></div>
+
+    <div class="footer">
+      <span class="hint">Se guarda en <code>profile/</code>, fuera de git: la voz entera y, del resto, sólo lo que difiere de los defaults del equipo.</span>
+      <span class="spacer"></span>
+      ${s.ready ? `<button onclick="backToList()">Volver</button>` : ''}
+      <button class="primary" onclick="saveSetup()">Guardar</button>
+    </div>
+    </div>`;
+}
+
 // ------------------------------------------------------------ render
 function render(force) {
   document.getElementById('who').textContent = S.config.me ? `${S.config.org} · ${S.config.me}` : '';
   document.getElementById('updated').textContent = S.generatedAt ? `lista de ${S.generatedAt.slice(11, 16)}` : '';
   const main = document.getElementById('main');
   // En la vista de borrador no se repinta por el sondeo: se perdería el scroll y lo editado.
-  if ((S.view === 'draft' || S.view === 'conv') && !force && main.querySelector('.draft-head')) {
+  if ((S.view === 'draft' || S.view === 'conv' || S.view === 'setup') && !force && main.querySelector('.draft-head')) {
     const l = main.querySelector('pre.log'); if (l) l.textContent = S.logLines.join('\n') || '(vacío)';
     return;
   }
   const y = window.scrollY;
-  let html = S.view === 'draft' ? renderDraft() : S.view === 'conv' ? renderConversation() : renderList();
+  let html = S.view === 'draft' ? renderDraft() : S.view === 'conv' ? renderConversation() : S.view === 'setup' ? renderSetup() : renderList();
   if (S.showLog) html += `<h2>Log</h2><pre class="log">${esc(S.logLines.join('\n')) || '(vacío)'}</pre>`;
   main.innerHTML = html;
   if (S.view === 'draft') { updateCount(); main.querySelectorAll('textarea').forEach(autosize); }
@@ -517,6 +728,7 @@ function btnset(buttons) { return buttons.length ? `<div class="btnset">${button
 // después del approve (ahí sí hay algo que mirar) o que el usuario pida verlas.
 function isDone(pr) { const a = pr.approval; return !!a && !(a.sha && a.sha !== pr.head); }
 function toggleApproved() { S.showApproved = !S.showApproved; render(true); }
+function gistLine(pr) { const g = pr.draft && pr.draft.gist; return g ? `<div class="gist" title="Qué hace la PR, según la última revisión">${esc(g)}</div>` : ''; }
 function renderList() {
   if (S.error) return `<div class="empty">No se pudo cargar la lista de PRs.<br><code>${esc(S.error)}</code><br><br><button onclick="refresh(true)">Reintentar</button></div>`;
   if (!S.prs.length && !S.generatedAt) return `<div class="empty">Observando el multiverso…</div>`;
@@ -536,7 +748,7 @@ function renderList() {
       <tr>
         <td class="num"><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a></td>
         <td><div class="title">${esc(pr.title)}</div>
-            <div class="meta">${esc(pr.author)} · generado ${esc(pr.draft.created_at.slice(5, 16))}${pr.draft.cost_usd != null ? ` · ${pr.draft.cost_usd.toFixed(2)} USD` : ''}</div></td>
+            <div class="meta">${esc(pr.author)} · generado ${esc(pr.draft.created_at.slice(5, 16))}${pr.draft.cost_usd != null ? ` · ${pr.draft.cost_usd.toFixed(2)} USD` : ''}</div>${gistLine(pr)}</td>
         <td><span class="pill warn">${pr.draft.comments} de ${pr.draft.total} com.${pr.draft.praise ? ' + elogio' : ''}${pr.draft.stale ? ' · obsoleto' : ''}</span></td>
         <td class="actions">${btnset([`<button class="primary" onclick="openDraft('${pr.repo}', ${pr.number})">Ver borrador</button>`])}</td>
       </tr>`).join('')}</tbody></table>`
@@ -550,7 +762,7 @@ function renderList() {
       <tr>
         <td class="num"><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a></td>
         <td><div class="title">${esc(pr.title)}</div>
-            <div class="meta">${esc(pr.author)} · publicados ${pr.last.findings} com. ${esc(fmtAgo(pr.last.at))} hasta <code>${esc(pr.last.sha.slice(0, 10))}</code></div></td>
+            <div class="meta">${esc(pr.author)} · publicados ${pr.last.findings} com. ${esc(fmtAgo(pr.last.at))} hasta <code>${esc(pr.last.sha.slice(0, 10))}</code></div>${gistLine(pr)}</td>
         <td>${statusCell(pr)}</td>
         <td class="actions">${actionsCell(pr)}</td>
       </tr>`).join('')}</tbody></table>`
@@ -567,7 +779,7 @@ function renderList() {
         <td><div class="title">${esc(pr.title)}</div>
             <div class="meta">${esc(pr.author)} · <code>${esc(pr.head_ref)}</code> → ${esc(pr.base_ref)} ·
                  <span style="color:var(--ok)">+${pr.additions}</span> <span style="color:var(--bad)">−${pr.deletions}</span> ·
-                 ${fmtAgo(pr.updated_at)}</div></td>
+                 ${fmtAgo(pr.updated_at)}</div>${gistLine(pr)}</td>
         <td>${statusCell(pr)}</td>
         <td class="actions">${actionsCell(pr)}</td>
       </tr>`).join('') : `<tr><td colspan="4" style="color:var(--muted)">Nada que observar: ${visible.some(p => p.repo === repo) ? 'todas sus PRs ya salen arriba' : S.prs.some(p => p.repo === repo) ? 'sólo PRs aprobadas' : 'sin PRs candidatas'}</td></tr>`;
@@ -579,6 +791,18 @@ function renderList() {
   return approvedNote + draftsHtml + publishedHtml + reposHtml + `<p class="oath">Uatu, el Vigilante, observa la Tierra desde el Área Azul de la Luna y juró no interferir jamás... pero no lo puede evitar.<br>Aquí observa las PRs de ${esc(S.config.org || '')}: intervenir (publicar) es siempre decisión tuya.</p>`;
 }
 
+function renderExplanation(ex) {
+  if (!ex || !ex.what) return '';
+  const list = items => `<ul>${items.map(x => `<li>${md(x)}</li>`).join('')}</ul>`;
+  return `
+    <div class="explain">
+      <label class="rule">Qué hace esta PR · interno, no se publica</label>
+      <p class="what">${md(ex.what)}</p>
+      ${ex.changes && ex.changes.length ? list(ex.changes) : ''}
+      ${ex.unmentioned && ex.unmentioned.length ? `<div class="sub">Lo que la descripción no cuenta</div>${list(ex.unmentioned)}` : ''}
+      ${ex.since_last ? `<div class="sub">Desde la última revisión</div><p class="what">${md(ex.since_last)}</p>` : ''}
+    </div>`;
+}
 function renderDraft() {
   const d = S.draft, pr = S.prs.find(p => p.key === `${d.repo}#${d.number}`);
   const stale = pr && pr.head !== d.head; d.stale = stale;
@@ -594,6 +818,7 @@ function renderDraft() {
         <span>generado ${esc(d.created_at)}</span>${c.cost_usd != null ? `<span>${c.turns} turnos · ${c.cost_usd.toFixed(2)} USD</span>` : ''}</div>
       ${ro ? `<div class="banner ok">Este borrador ya está ${d.status === 'published' ? `publicado (${esc(d.published_at)}, ${d.published_comments} comentarios)` : `descartado (${esc(d.discarded_at)})`}. Sólo lectura.${d.status === 'published' ? ` <button class="link" onclick="openConversation('${d.repo}', ${d.number})">Ver respuestas</button>` : ''}</div>` : ''}
       ${!ro && stale ? `<div class="banner warn">La PR tiene commits nuevos desde que se generó este borrador. Puedes publicarlo igual (los comentarios se anclan al commit revisado) o volver a la lista y revisar el delta.</div>` : ''}
+      ${renderExplanation(d.explanation)}
       <div style="margin-top:12px"><label class="rule">Resumen (cuerpo de la review; normalmente vacío)</label>
         <textarea id="summary" ${ro ? 'readonly' : ''} style="min-height:44px" oninput="autosize(this)">${esc(d.summary)}</textarea></div>
     </div>`;
@@ -680,6 +905,8 @@ function renderConversation() {
 }
 
 refresh(true).then(() => {
+  if (!S.ready) return;  // refresh ya ha abierto Setup
+  if (location.hash === '#setup') return openSetup();
   const m = location.hash.match(/^#([A-Za-z0-9._-]+)\/(\d+)(\/respuestas)?$/);
   if (m && m[3]) openConversation(m[1], parseInt(m[2], 10));
   else if (m) openDraft(m[1], parseInt(m[2], 10));

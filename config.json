@@ -4,7 +4,6 @@
     "gofre",
     "tortilla"
   ],
-  "me": "anbillin",
   "exclude_authors": [
     "app/github-actions",
     "dependabot[bot]"

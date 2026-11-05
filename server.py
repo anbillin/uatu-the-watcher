@@ -28,6 +28,10 @@ JOBS_LOCK = threading.Lock()
 QUEUE = queue.Queue()
 CACHE = {"rows": None, "at": 0.0, "error": None}
 CACHE_LOCK = threading.Lock()
+# Setup: comprobaciones cacheadas y la tarea larga en curso (importar o probar la voz), que va en
+# su propio hilo para no esperar detrás de una revisión de 4 minutos.
+SETUP = {"checks": None, "gh_user": None, "org_repos": None, "access": None, "job": None}
+SETUP_LOCK = threading.Lock()
 
 
 class ApiError(Exception):
@@ -95,6 +99,53 @@ def jobs_snapshot() -> dict:
         return {k: dict(v) for k, v in JOBS.items()}
 
 
+# ----------------------------------------------------------------- setup
+
+def setup_job(kind: str, fn) -> dict:
+    with SETUP_LOCK:
+        job = SETUP["job"]
+        if job and job["status"] == "running":
+            raise ApiError(409, f"ya hay una tarea de setup en marcha ({job['kind']}); espera a que acabe")
+        job = {"kind": kind, "status": "running", "started_at": uatu.now(), "finished_at": None,
+               "result": None, "error": None}
+        SETUP["job"] = job
+
+    def run():
+        try:
+            job["result"] = fn()
+            job["status"] = "done"
+        except Exception as exc:  # noqa: BLE001
+            job["status"], job["error"] = "error", str(exc)[:1000]
+            uatu.log(f"setup ({kind}): ERROR {exc}")
+            traceback.print_exc()
+        finally:
+            job["finished_at"] = uatu.now()
+
+    threading.Thread(target=run, name=f"uatu-setup-{kind}", daemon=True).start()
+    return job
+
+
+def refresh_checks(repos=None) -> None:
+    """Comprobaciones del entorno; con `repos`, también el acceso SSH a cada uno (1-2 s por repo)."""
+    with SETUP_LOCK:
+        SETUP["checks"] = uatu.run_checks()
+        SETUP["gh_user"] = uatu.gh_user() if any(c["name"] == "gh" and c["ok"] for c in SETUP["checks"]) else None
+        try:
+            SETUP["org_repos"] = uatu.list_org_repos() if SETUP["gh_user"] else []
+        except Exception as exc:  # noqa: BLE001 — sin la lista se eligen a mano
+            uatu.log(f"setup: no se pudo listar los repos de {uatu.ORG}: {str(exc)[:200]}")
+            SETUP["org_repos"] = []
+        if repos is not None:
+            SETUP["access"] = [uatu.check_repo_access(r) for r in repos]
+
+
+def setup_state() -> dict:
+    if SETUP["checks"] is None:
+        refresh_checks()
+    with SETUP_LOCK:
+        return {**uatu.setup_snapshot(), **{k: v for k, v in SETUP.items()}}
+
+
 # ----------------------------------------------------------------- caché de PRs
 
 def invalidate() -> None:
@@ -116,6 +167,7 @@ def overview(force: bool = False) -> list:
 
 DRAFT_RE = re.compile(r"^/api/drafts/([A-Za-z0-9._-]+)/(\d+)(?:/(publish|discard))?$")
 PR_RE = re.compile(r"^/api/prs/([A-Za-z0-9._-]+)/(\d+)/(conversation|approve)$")
+SETUP_RE = re.compile(r"^/api/setup(?:/(checks|voice/import|voice/preview))?$")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -168,12 +220,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_file(WEB_DIR / "index.html", "text/html; charset=utf-8")
         if path == "/api/prs":
             force = "refresh=1" in query
-            return self.handle_api(lambda: {
-                "prs": overview(force), "jobs": jobs_snapshot(),
-                "config": {"repos": uatu.CONFIG["repos"], "me": uatu.ME, "org": uatu.ORG,
-                           "max_prs_per_run": uatu.CONFIG["max_prs_per_run"]},
-                "generated_at": uatu.now(),
-            })
+            return self.handle_api(lambda: self.get_prs(force))
+        if path == "/api/setup":
+            return self.handle_api(setup_state)
         if path == "/api/jobs":
             return self.handle_api(lambda: {"jobs": jobs_snapshot()})
         if path == "/api/log":
@@ -192,6 +241,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_api(self.post_review)
         if path == "/api/review-all":
             return self.handle_api(self.post_review_all)
+        m = SETUP_RE.match(path)
+        if m and m.group(1) == "checks":
+            return self.handle_api(self.post_setup_checks)
+        if m and m.group(1) == "voice/import":
+            return self.handle_api(self.post_voice_import)
+        if m and m.group(1) == "voice/preview":
+            return self.handle_api(self.post_voice_preview)
         m = PR_RE.match(path)
         if m and m.group(3) == "approve":
             return self.handle_api(lambda: self.post_approve(m.group(1), int(m.group(2))))
@@ -204,12 +260,62 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PUT(self):
         path = self.path.partition("?")[0]
+        if path == "/api/setup":
+            return self.handle_api(self.put_setup)
         m = DRAFT_RE.match(path)
         if m and not m.group(3):
             return self.handle_api(lambda: self.put_draft(m.group(1), int(m.group(2))))
         self.send_json({"error": "no encontrado"}, 404)
 
     # --- handlers
+    def get_prs(self, force):
+        """La lista. Sin perfil completo no se llama a GitHub: la web manda a Setup."""
+        config = {"repos": uatu.CONFIG.get("repos") or [], "me": uatu.ME, "org": uatu.ORG,
+                  "name": uatu.CONFIG.get("name"), "max_prs_per_run": uatu.CONFIG["max_prs_per_run"]}
+        if not uatu.is_ready():
+            return {"ready": False, "prs": [], "jobs": {}, "config": config, "generated_at": uatu.now()}
+        return {"ready": True, "prs": overview(force), "jobs": jobs_snapshot(), "config": config,
+                "generated_at": uatu.now()}
+
+    def put_setup(self):
+        """Guarda perfil y voz; la config se recarga en caliente."""
+        body = self.read_body()
+        try:
+            profile = uatu.clean_profile(body.get("profile") or {})
+        except ValueError as err:
+            raise ApiError(400, str(err))
+        voice = body.get("voice")
+        uatu.save_profile(profile, str(voice) if voice is not None else None)
+        invalidate()
+        return setup_state()
+
+    def post_setup_checks(self):
+        body = self.read_body()
+        repos = body.get("repos")
+        refresh_checks([str(r) for r in repos] if isinstance(repos, list) else (uatu.CONFIG.get("repos") or []))
+        return setup_state()
+
+    def post_voice_import(self):
+        """Destila la voz del historial de GitHub en segundo plano; el resultado va al textarea,
+        no a disco: se guarda con el resto del perfil."""
+        body = self.read_body()
+        me = str(body.get("me") or uatu.ME or "").strip()
+        if not me:
+            raise ApiError(400, "hace falta el usuario de GitHub")
+        repos = [str(r) for r in body.get("repos") or []] or (uatu.CONFIG.get("repos") or [])
+        if not repos:
+            raise ApiError(400, "elige al menos un repo")
+        name = str(body.get("name") or "").strip() or None
+        return {"job": setup_job("import", lambda: uatu.import_voice(me, name, repos))}
+
+    def post_voice_preview(self):
+        body = self.read_body()
+        voice = str(body.get("voice") or "").strip()
+        if not voice:
+            raise ApiError(400, "la voz está vacía")
+        name = str(body.get("name") or "").strip() or None
+        return {"job": setup_job("preview", lambda: uatu.preview_voice(voice, name))}
+
     def get_draft(self, repo, number):
         draft = uatu.load_draft(repo, number)
         if not draft:
