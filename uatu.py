@@ -289,9 +289,11 @@ def draft_summary(draft: dict, head: str) -> dict:
         "published_at": draft.get("published_at"),
         "mode": draft["mode"],
         "stale": draft["head"] != head,
-        "cost_usd": draft.get("claude", {}).get("cost_usd"),
+        "cost_usd": (draft.get("claude") or {}).get("cost_usd"),
         "praise": bool(praise_text(draft)),
         "gist": explanation_gist(draft),
+        "manual": draft.get("claude") is None,
+        "mine": sum(1 for c in draft["comments"] if c.get("source") == "me"),
     }
 
 
@@ -346,7 +348,8 @@ def overview() -> list:
         try:
             convs = fetch_conversations(repo, [p["number"] for p in prs])
         except Exception as exc:  # noqa: BLE001 — la lista sigue valiendo sin esta capa
-            log(f"{repo}: no se pudo leer aprobaciones/respuestas: {str(exc)[:200]}")
+            # la última línea es lo que dice GitHub; antes va la consulta entera, que no aporta
+            log(f"{repo}: no se pudo leer aprobaciones/respuestas: {str(exc).strip().splitlines()[-1][:300]}")
             convs = {}
         for pr in prs:
             key = state_key(repo, pr["number"])
@@ -375,13 +378,34 @@ def overview() -> list:
 
 # ----------------------------------------------------------------- conversación y aprobación
 
+# Las reacciones sólo se piden al abrir una PR: con las ~40 PRs de un repo en una sola consulta,
+# el conector `reactors` dispara el cómputo de nodos posibles de GitHub por encima de su límite
+# (500.000) y la consulta entera falla, con lo que la lista se queda sin hilos ni aprobaciones.
+REACTIONS_FIELDS = "reactionGroups { content viewerHasReacted reactors(first: 10) { totalCount nodes { ... on User { login } } } }"
 CONVERSATION_FRAGMENT = """
 fragment PR on PullRequest {
   number headRefOid
-  reviews(last: 30, author: "%s") { nodes { state submittedAt url commit { oid } } }
+  reviews(last: 30, author: "%(me)s") { nodes { state submittedAt url commit { oid } } }
   reviewThreads(first: 100) { nodes { id isResolved isOutdated path line originalLine
-    comments(first: 30) { nodes { databaseId author { login } body createdAt url } } } }
+    comments(first: 30) { nodes { id databaseId author { login } body createdAt url %(reactions)s } } } }
 }"""
+
+# Las ocho reacciones que admite GitHub, en el orden en que las pinta él.
+REACTIONS = {"THUMBS_UP": "👍", "THUMBS_DOWN": "👎", "LAUGH": "😄", "HOORAY": "🎉",
+             "CONFUSED": "😕", "HEART": "❤️", "ROCKET": "🚀", "EYES": "👀"}
+
+
+def parse_reactions(groups: list) -> list:
+    """Sólo las reacciones que alguien ha puesto: emoji, cuántos, quiénes y si una es mía."""
+    out = []
+    for g in groups or []:
+        n = g["reactors"]["totalCount"]
+        if not n:
+            continue
+        out.append({"content": g["content"], "emoji": REACTIONS.get(g["content"], "?"), "count": n,
+                    "me": g["viewerHasReacted"],
+                    "who": [u["login"] for u in g["reactors"]["nodes"] if u.get("login")]})
+    return out
 
 
 def load_seen() -> dict:
@@ -420,8 +444,10 @@ def parse_threads(nodes: list) -> list:
         if not cs or (cs[0].get("author") or {}).get("login") != ME:
             continue
         def item(c):
-            return {"id": c["databaseId"], "author": (c.get("author") or {}).get("login") or "(borrado)",
-                    "body": c["body"], "at": c["createdAt"], "url": c["url"]}
+            return {"id": c["databaseId"], "node_id": c["id"],
+                    "author": (c.get("author") or {}).get("login") or "(borrado)",
+                    "body": c["body"], "at": c["createdAt"], "url": c["url"],
+                    "reactions": parse_reactions(c.get("reactionGroups"))}
         replies = [item(c) for c in cs[1:]]
         threads.append({
             "id": t["id"], "path": t["path"], "line": t["line"] or t["originalLine"],
@@ -447,14 +473,16 @@ def conversation_summary(conv: dict, key: str, seen: dict) -> dict:
     }
 
 
-def fetch_conversations(repo: str, numbers: list) -> dict:
+def fetch_conversations(repo: str, numbers: list, reactions: bool = False) -> dict:
     """Una sola consulta GraphQL por repo: mi aprobación y los hilos de mis comentarios
-    en cada PR. Devuelve {número: {"approval", "threads", "head"}}."""
+    en cada PR. Devuelve {número: {"approval", "threads", "head"}}. Con `reactions`
+    trae también las reacciones de cada comentario (sólo para una PR, ver arriba)."""
     if not numbers:
         return {}
     body = "\n".join(f"p{n}: pullRequest(number: {n}) {{ ...PR }}" for n in numbers)
+    fragment = CONVERSATION_FRAGMENT % {"me": ME, "reactions": REACTIONS_FIELDS if reactions else ""}
     query = ("query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) {\n"
-             f"{body}\n}} }}" + CONVERSATION_FRAGMENT % ME)
+             f"{body}\n}} }}" + fragment)
     data = gh_json(["api", "graphql", "-f", f"query={query}", "-F", f"owner={ORG}", "-F", f"name={repo}"])
     out = {}
     for pr in ((data.get("data") or {}).get("repository") or {}).values():
@@ -471,7 +499,7 @@ def fetch_conversations(repo: str, numbers: list) -> dict:
 def get_conversation(repo: str, number: int) -> dict:
     """Conversación completa de una PR, para verla en la web; marca las respuestas como vistas."""
     pr = get_pr(repo, number)
-    conv = fetch_conversations(repo, [number]).get(number) or {"approval": None, "threads": []}
+    conv = fetch_conversations(repo, [number], reactions=True).get(number) or {"approval": None, "threads": []}
     key = state_key(repo, number)
     entry = load_state().get(key)
     can, why = can_approve(pr, entry, conv)
@@ -524,6 +552,21 @@ def approve_pr(repo: str, number: int, message: str = "") -> dict:
     unreviewed = " (commits sin revisar por UATU)" if entry and entry["sha"] != pr["headRefOid"] else ""
     log(f"{key}: aprobada en {pr['headRefOid'][:10]}{unreviewed}{' con mensaje' if payload['body'] else ''} · {pr['url']}")
     return {"key": key, "sha": pr["headRefOid"], "at": now()}
+
+
+def react(comment_node_id: str, content: str, on: bool) -> list:
+    """Pone o quita mi reacción en un comentario de review y devuelve cómo quedan sus
+    reacciones. Va por GraphQL porque quitar por REST exige saber el id de la reacción."""
+    if content not in REACTIONS:
+        raise ValueError(f"reacción desconocida: {content}")
+    mutation = "addReaction" if on else "removeReaction"
+    query = ("mutation($id: ID!, $content: ReactionContent!) { %s(input: {subjectId: $id, content: $content}) {"
+             " subject { ... on PullRequestReviewComment { reactionGroups { content viewerHasReacted"
+             " reactors(first: 10) { totalCount nodes { ... on User { login } } } } } } } }" % mutation)
+    data = gh_json(["api", "graphql", "-f", f"query={query}", "-F", f"id={comment_node_id}", "-F", f"content={content}"])
+    if data.get("errors"):
+        raise RuntimeError(data["errors"][0].get("message") or "GitHub ha rechazado la reacción")
+    return parse_reactions(data["data"][mutation]["subject"]["reactionGroups"])
 
 
 # ----------------------------------------------------------------- git
@@ -591,6 +634,70 @@ def commentable_lines(diff: str) -> dict:
             new_ln += 1
         # las líneas '-' no avanzan el contador del lado nuevo
     return files
+
+
+def pr_diff(repo: str, base_ref: str, head: str) -> str:
+    """Diff unificado de la PR anclado a un commit concreto (merge-base de la base..head), tal y
+    como lo sirve GitHub. No toca el clon ni el lock, así que vale aunque haya una revisión en curso."""
+    try:
+        return sh(["gh", "api", "-H", "Accept: application/vnd.github.diff",
+                   f"repos/{ORG}/{repo}/compare/{base_ref}...{head}"])
+    except RuntimeError as exc:
+        raise RuntimeError(f"GitHub no devuelve el diff: {str(exc).strip().splitlines()[-1][:300]}") from exc
+
+
+def parse_diff(diff: str) -> list:
+    """El diff por ficheros para pintarlo: cada fila con nº viejo (o), nº nuevo (n), tipo (k: '+', '-',
+    ' ' o '@' para la cabecera del hunk) y texto (t). Misma lectura de cabeceras que commentable_lines."""
+    files, cur, old_ln, new_ln = [], None, 0, 0
+    hunk_re = re.compile(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@")
+    for ln in diff.splitlines():
+        if ln.startswith("diff --git "):
+            cur = {"path": None, "old_path": None, "status": "modified", "additions": 0, "deletions": 0, "rows": []}
+            files.append(cur)
+            continue
+        if cur is None:
+            continue
+        if ln.startswith("--- "):
+            t = ln[4:].strip()
+            cur["old_path"] = None if t == "/dev/null" else (t[2:] if t.startswith("a/") else t)
+            continue
+        if ln.startswith("+++ "):
+            t = ln[4:].strip()
+            cur["path"] = None if t == "/dev/null" else (t[2:] if t.startswith("b/") else t)
+            continue
+        m = hunk_re.match(ln)
+        if m:
+            old_ln, new_ln = int(m.group(1)), int(m.group(2))
+            cur["rows"].append({"o": None, "n": None, "k": "@", "t": ln})
+            continue
+        if cur["path"] is None and cur["old_path"] is None:
+            continue  # cabeceras extendidas (index, rename from/to, Binary files…)
+        if ln.startswith("\\"):
+            continue
+        if ln.startswith("+"):
+            cur["rows"].append({"o": None, "n": new_ln, "k": "+", "t": ln[1:]}); new_ln += 1; cur["additions"] += 1
+        elif ln.startswith("-"):
+            cur["rows"].append({"o": old_ln, "n": None, "k": "-", "t": ln[1:]}); old_ln += 1; cur["deletions"] += 1
+        elif ln.startswith(" ") or ln == "":
+            cur["rows"].append({"o": old_ln, "n": new_ln, "k": " ", "t": ln[1:]}); old_ln += 1; new_ln += 1
+    for f in files:
+        if f["path"] is None:
+            f["status"], f["path"] = "removed", f["old_path"]
+        elif f["old_path"] is None:
+            f["status"] = "added"
+        elif f["old_path"] != f["path"]:
+            f["status"] = "renamed"
+    return [f for f in files if f["path"]]
+
+
+def diff_context(files: list, path: str, start: int, end: int, around: int = 3) -> list:
+    """Como code_context, pero a partir del diff (lado nuevo), así no depende del clon."""
+    f = next((f for f in files if f["path"] == path), None)
+    if not f:
+        return []
+    return [{"n": r["n"], "text": r["t"], "hit": start <= r["n"] <= end}
+            for r in f["rows"] if r["n"] is not None and start - around <= r["n"] <= end + around]
 
 
 def code_context(repo_path: Path, path: str, start: int, end: int, around: int = 3) -> list:
@@ -865,8 +972,71 @@ def make_draft(pr: dict, force_full: bool = False) -> dict:
         gate = praise_gate(pr["author"]["login"])
         draft["praise"] = {"body": praise, "enabled": gate == "ok", "gate": gate}
         log(f"{key}: elogio propuesto ({'incluido' if gate == 'ok' else 'apartado por ' + gate})")
+    carry_own_comments(draft)
     save_draft(draft)
     log(f"{key}: borrador listo con {len(comments)} comentarios (sin publicar)")
+    return draft
+
+
+# ----------------------------------------------------------------- comentarios propios
+
+def carry_own_comments(draft: dict) -> None:
+    """Si había un borrador pendiente para el mismo commit, sus comentarios propios pasan al nuevo:
+    «Revisar de nuevo» sobre un borrador manual o con comentarios míos no los pierde."""
+    old = load_draft(draft["repo"], draft["number"])
+    if not old or old["status"] != "pending" or old["head"] != draft["head"]:
+        return
+    mine = [c for c in old["comments"] if c.get("source") == "me"]
+    if mine:
+        draft["comments"].extend(mine)
+        log(f"{state_key(draft['repo'], draft['number'])}: arrastrados {len(mine)} comentarios propios del borrador anterior")
+
+
+def new_manual_draft(pr: dict) -> dict:
+    """Borrador vacío, sin Claude: para revisar el código a mano y publicar los comentarios propios."""
+    draft = {
+        "repo": pr["repo"], "number": pr["number"], "title": pr["title"], "author": pr["author"]["login"],
+        "url": pr["url"], "head": pr["headRefOid"], "head_ref": pr["headRefName"], "base_ref": pr["baseRefName"],
+        "mode": "full", "last_sha": None, "lines_changed": pr["additions"] + pr["deletions"],
+        "created_at": now(), "status": "pending", "summary": "", "explanation": {}, "praise": None,
+        "comments": [], "claude": None,
+    }
+    save_draft(draft)
+    log(f"{state_key(pr['repo'], pr['number'])}: borrador manual creado (sin Claude)")
+    return draft
+
+
+def add_own_comment(draft: dict, diff: str, path: str, start_line: int, line: int, body: str) -> dict:
+    """Añade un comentario mío al borrador. Sólo en líneas que GitHub acepta (añadidas o de contexto
+    del diff de la PR en el commit del borrador); si no, ValueError."""
+    if draft["status"] != "pending":
+        raise ValueError(f"el borrador ya está {draft['status']}")
+    body = body.strip()
+    if not body:
+        raise ValueError("el comentario está vacío")
+    lines = commentable_lines(diff).get(path)
+    if not lines:
+        raise ValueError(f"{path} no está en el diff de la PR")
+    start_line = min(start_line or line, line)
+    bad = [l for l in range(start_line, line + 1) if l not in lines]
+    if bad:
+        raise ValueError(f"{path}:{bad[0]} no es una línea añadida ni de contexto; GitHub no admite comentarios ahí")
+    draft["comments"].append({
+        "path": path, "start_line": start_line, "line": line, "severity": None, "rule": None,
+        "body": body, "agreement": None, "enabled": True, "source": "me",
+        "context": diff_context(parse_diff(diff), path, start_line, line),
+    })
+    save_draft(draft)
+    return draft
+
+
+def remove_own_comment(draft: dict, index: int) -> dict:
+    if draft["status"] != "pending":
+        raise ValueError(f"el borrador ya está {draft['status']}")
+    if not 0 <= index < len(draft["comments"]) or draft["comments"][index].get("source") != "me":
+        raise ValueError("sólo se pueden quitar los comentarios propios; los de UATU se desmarcan")
+    del draft["comments"][index]
+    save_draft(draft)
     return draft
 
 
@@ -1214,6 +1384,12 @@ def cmd_approve(args) -> None:
     print(f"{res['key']} aprobada en {res['sha'][:10]}")
 
 
+def reactions_text(msg: dict) -> str:
+    """«  👍 2 🎉 1» al final de un mensaje; vacío si nadie ha reaccionado."""
+    rs = msg.get("reactions") or []
+    return ("  " + " ".join(f"{r['emoji']} {r['count']}" for r in rs)) if rs else ""
+
+
 def cmd_replies(args) -> None:
     """Enseña por consola los hilos de mis comentarios con sus respuestas."""
     conv = get_conversation(args.repo, args.pr)
@@ -1224,9 +1400,9 @@ def cmd_replies(args) -> None:
         flags = " ".join(f for f, on in (("resuelto", t["resolved"]), ("obsoleto", t["outdated"]),
                                          ("por contestar", t["awaiting_me"])) if on)
         print(f"\n{t['path']}:{t['line']} {flags}")
-        print(f"  {ME}: {t['comment']['body'].strip()}")
+        print(f"  {ME}: {t['comment']['body'].strip()}{reactions_text(t['comment'])}")
         for r in t["replies"]:
-            print(f"  ↳ {r['author']} ({r['at'][:16]}): {r['body'].strip()}")
+            print(f"  ↳ {r['author']} ({r['at'][:16]}): {r['body'].strip()}{reactions_text(r)}")
     s = conv["summary"]
     print(f"\n{s['threads']} hilos · {s['replies']} respuestas · {s['awaiting_me']} por contestar"
           + (f" · {'se puede aprobar' if conv['can_approve'] else conv['approve_blocked']}"))

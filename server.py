@@ -8,6 +8,7 @@ de quien lo ejecuta. Con `--host 0.0.0.0` se abre a la red local, sin autenticac
 de otra; publicar o descartar un borrador es inmediato.
 """
 import argparse
+import collections
 import json
 import queue
 import re
@@ -163,10 +164,31 @@ def overview(force: bool = False) -> list:
         return rows
 
 
+# ----------------------------------------------------------------- diff de la PR
+
+DIFFS = collections.OrderedDict()   # (repo, number, head) -> diff crudo; un commit no cambia
+DIFFS_LOCK = threading.Lock()
+DIFFS_MAX = 20
+
+
+def pr_diff(repo: str, number: int, base_ref: str, head: str) -> str:
+    key = (repo, number, head)
+    with DIFFS_LOCK:
+        if key in DIFFS:
+            DIFFS.move_to_end(key)
+            return DIFFS[key]
+    diff = uatu.pr_diff(repo, base_ref, head)
+    with DIFFS_LOCK:
+        DIFFS[key] = diff
+        while len(DIFFS) > DIFFS_MAX:
+            DIFFS.popitem(last=False)
+    return diff
+
+
 # ----------------------------------------------------------------- HTTP
 
-DRAFT_RE = re.compile(r"^/api/drafts/([A-Za-z0-9._-]+)/(\d+)(?:/(publish|discard))?$")
-PR_RE = re.compile(r"^/api/prs/([A-Za-z0-9._-]+)/(\d+)/(conversation|approve)$")
+DRAFT_RE = re.compile(r"^/api/drafts/([A-Za-z0-9._-]+)/(\d+)(?:/(publish|discard|create|comments)(?:/(\d+))?)?$")
+PR_RE = re.compile(r"^/api/prs/([A-Za-z0-9._-]+)/(\d+)/(conversation|approve|react|diff)$")
 SETUP_RE = re.compile(r"^/api/setup(?:/(checks|voice/import|voice/preview))?$")
 
 
@@ -233,6 +255,9 @@ class Handler(BaseHTTPRequestHandler):
         m = PR_RE.match(path)
         if m and m.group(3) == "conversation":
             return self.handle_api(lambda: self.get_conversation(m.group(1), int(m.group(2))))
+        if m and m.group(3) == "diff":
+            head = dict(p.split("=", 1) for p in query.split("&") if "=" in p).get("head")
+            return self.handle_api(lambda: self.get_diff(m.group(1), int(m.group(2)), head))
         self.send_json({"error": "no encontrado"}, 404)
 
     def do_POST(self):
@@ -251,11 +276,24 @@ class Handler(BaseHTTPRequestHandler):
         m = PR_RE.match(path)
         if m and m.group(3) == "approve":
             return self.handle_api(lambda: self.post_approve(m.group(1), int(m.group(2))))
+        if m and m.group(3) == "react":
+            return self.handle_api(lambda: self.post_react(m.group(1)))
         m = DRAFT_RE.match(path)
         if m and m.group(3) == "publish":
             return self.handle_api(lambda: self.post_publish(m.group(1), int(m.group(2))))
         if m and m.group(3) == "discard":
             return self.handle_api(lambda: self.post_discard(m.group(1), int(m.group(2))))
+        if m and m.group(3) == "create":
+            return self.handle_api(lambda: self.post_create(m.group(1), int(m.group(2))))
+        if m and m.group(3) == "comments" and not m.group(4):
+            return self.handle_api(lambda: self.post_comment(m.group(1), int(m.group(2))))
+        self.send_json({"error": "no encontrado"}, 404)
+
+    def do_DELETE(self):
+        path = self.path.partition("?")[0]
+        m = DRAFT_RE.match(path)
+        if m and m.group(3) == "comments" and m.group(4):
+            return self.handle_api(lambda: self.delete_comment(m.group(1), int(m.group(2)), int(m.group(4))))
         self.send_json({"error": "no encontrado"}, 404)
 
     def do_PUT(self):
@@ -392,10 +430,79 @@ class Handler(BaseHTTPRequestHandler):
         invalidate()
         return res
 
+    def post_react(self, repo):
+        """Pone (on=true) o quita mi reacción en un comentario de la conversación. Devuelve
+        las reacciones del comentario tal y como quedan, para pintarlas sin recargar."""
+        if repo not in uatu.CONFIG["repos"]:
+            raise ApiError(400, "repo inválido")
+        body = self.read_body()
+        node_id, content = str(body.get("comment") or ""), str(body.get("content") or "")
+        if not node_id or content not in uatu.REACTIONS:
+            raise ApiError(400, "hace falta el comentario y una reacción válida")
+        return {"reactions": uatu.react(node_id, content, bool(body.get("on", True)))}
+
     def post_discard(self, repo, number):
         draft = self.get_draft(repo, number)
         try:
             draft = uatu.discard_draft(draft)
+        except ValueError as err:
+            raise ApiError(409, str(err))
+        invalidate()
+        return draft
+
+    # --- código completo y comentarios propios
+    def get_diff(self, repo, number, head):
+        """El diff de la PR por ficheros, anclado a `head` (por defecto el commit actual de la PR).
+        Con un borrador abierto la web pide el head del borrador, que es donde se anclan los comentarios."""
+        if repo not in uatu.CONFIG["repos"]:
+            raise ApiError(400, "repo inválido")
+        if head and not re.fullmatch(r"[0-9a-f]{7,40}", head):
+            raise ApiError(400, "head inválido")
+        # La base se lee de la PR en vivo, no del borrador: si la rama base se borró (hotfix ya
+        # mergeado), GitHub reapunta la PR y el compare con la rama vieja da 404.
+        pr = uatu.get_pr(repo, number)
+        head, base_ref = head or pr["headRefOid"], pr["baseRefName"]
+        files = uatu.parse_diff(pr_diff(repo, number, base_ref, head))
+        return {"repo": repo, "number": number, "head": head, "base_ref": base_ref, "files": files,
+                "additions": sum(f["additions"] for f in files), "deletions": sum(f["deletions"] for f in files)}
+
+    def post_create(self, repo, number):
+        """Borrador manual: vacío y sin Claude, para comentar el código a mano."""
+        if repo not in uatu.CONFIG["repos"]:
+            raise ApiError(400, "repo inválido")
+        key = uatu.state_key(repo, number)
+        with JOBS_LOCK:
+            job = JOBS.get(key)
+            if job and job["status"] in ("queued", "running"):
+                raise ApiError(409, f"{key} se está revisando ahora mismo; espera al borrador")
+        if fresh_pending_draft(repo, number):
+            raise ApiError(409, f"{key} ya tiene un borrador pendiente: ábrelo")
+        draft = uatu.new_manual_draft(uatu.get_pr(repo, number))
+        invalidate()
+        return draft
+
+    def post_comment(self, repo, number):
+        draft = self.get_draft(repo, number)
+        body = self.read_body()
+        try:
+            path, line = str(body.get("path") or ""), int(body.get("line") or 0)
+            start = int(body.get("start_line") or line)
+        except (TypeError, ValueError):
+            raise ApiError(400, "path y line son obligatorios")
+        if not path or line < 1:
+            raise ApiError(400, "path y line son obligatorios")
+        diff = pr_diff(repo, number, draft["base_ref"], draft["head"])
+        try:
+            draft = uatu.add_own_comment(draft, diff, path, start, line, str(body.get("body") or ""))
+        except ValueError as err:
+            raise ApiError(409, str(err))
+        invalidate()
+        return draft
+
+    def delete_comment(self, repo, number, index):
+        draft = self.get_draft(repo, number)
+        try:
+            draft = uatu.remove_own_comment(draft, index)
         except ValueError as err:
             raise ApiError(409, str(err))
         invalidate()

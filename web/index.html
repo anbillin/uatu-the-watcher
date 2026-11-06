@@ -176,6 +176,43 @@
   pre.code .ln.hit { background: var(--hit); box-shadow: inset 3px 0 0 var(--warn); }
   pre.code .n { display: inline-block; width: 44px; color: var(--muted); text-align: right; margin-right: 14px; user-select: none; }
   .card .body { padding: 12px 14px; }
+  /* ---------- código completo de la PR: el diff por ficheros, con comentarios en línea ---------- */
+  .diffsec { margin-top: 14px; }
+  .diffsec .lead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin: 0 0 6px; }
+  details.file { background: var(--card); border: 1px solid var(--line); border-radius: 12px; margin-top: 8px; overflow: hidden; box-shadow: var(--shadow); }
+  details.file > summary { display: flex; align-items: center; gap: 10px; padding: 8px 14px; background: var(--card-2); cursor: pointer; list-style: none; font-size: 13px; }
+  details.file > summary::-webkit-details-marker { display: none; }
+  details.file > summary::before { content: "▸"; color: var(--muted); font-size: 11px; width: 10px; flex: none; }
+  details.file[open] > summary { border-bottom: 1px solid var(--line-2); }
+  details.file[open] > summary::before { content: "▾"; }
+  details.file > summary .path { font-family: var(--mono); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  details.file > summary .stat { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+  details.file > summary .pill { font-size: 11px; }
+  pre.code.diff { border-bottom: none; }
+  pre.code.diff .ln { padding-left: 4px; position: relative; display: flex; align-items: stretch; }
+  pre.code.diff .ln .n { width: 40px; margin-right: 0; flex: none; padding-right: 6px; }
+  pre.code.diff .ln .n + .n { margin-right: 26px; }
+  pre.code.diff .ln .t { white-space: pre; flex: 1; }
+  pre.code.diff .ln.add { background: color-mix(in srgb, var(--ok) 11%, transparent); }
+  pre.code.diff .ln.del { background: color-mix(in srgb, var(--bad) 11%, transparent); color: var(--muted); }
+  pre.code.diff .ln.hunk { color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); padding: 3px 14px 3px 110px; margin: 4px 0; }
+  pre.code.diff .ln.marked { box-shadow: inset 3px 0 0 var(--accent); }
+  pre.code.diff .ln .plus { position: absolute; left: 86px; top: 0; height: 18px; width: 18px; padding: 0; line-height: 16px; font-size: 13px; border-radius: 5px;
+                            border-color: var(--accent); color: #061024; background: var(--accent); opacity: 0; transition: opacity .1s; }
+  pre.code.diff .ln.can:hover .plus, pre.code.diff .ln .plus:focus { opacity: 1; }
+  pre.code.diff .ln .mark { position: absolute; left: 86px; top: 1px; font-size: 11px; color: var(--accent); cursor: pointer; user-select: none; }
+  .note { margin: 2px 14px 8px 110px; padding: 8px 12px; border: 1px solid var(--line-2); border-left: 3px solid var(--line); border-radius: 8px; background: var(--card-2);
+          font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; white-space: normal; }
+  .note.mine { border-left-color: var(--accent); }
+  .note .hd { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .note .hd .spacer { flex: 1; }
+  .note .text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .note .text pre { margin: 6px 0; padding: 8px 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line-2); font: 12px/1.5 var(--mono); overflow-x: auto; white-space: pre; }
+  .note .text code { font: 12px var(--mono); background: color-mix(in srgb, var(--muted) 12%, transparent); padding: 1px 4px; border-radius: 4px; }
+  .composer { margin: 4px 14px 10px 110px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 10px; background: var(--card); box-shadow: 0 0 0 3px var(--glow); white-space: normal; }
+  .composer textarea { min-height: 72px; overflow: auto; font-size: 13px; }
+  .composer .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; font: 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; color: var(--muted); }
+  .composer .row .spacer { flex: 1; }
   .footer { display: flex; align-items: center; gap: 10px; margin-top: 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px;
             position: sticky; bottom: 12px; background: color-mix(in srgb, var(--card) 88%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
             box-shadow: 0 -10px 30px -20px rgba(0,0,0,.5); }
@@ -194,6 +231,13 @@
   .thread .who b { display: block; color: var(--ink); font-weight: 600; }
   .thread .who a { color: var(--muted); }
   .thread .text { font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .thread .reacts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; align-items: center; }
+  .thread .reacts button { padding: 1px 8px; border-radius: 999px; font-size: 12px; line-height: 1.6; background: color-mix(in srgb, var(--muted) 8%, transparent); }
+  .thread .reacts button.mine { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .thread .reacts button.more { color: var(--muted); padding: 1px 7px; }
+  .thread .reacts .picker { display: flex; gap: 3px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 999px; background: var(--card); }
+  .thread .reacts .picker button { border: none; background: none; padding: 1px 4px; font-size: 14px; }
+  .thread .reacts .picker button:hover { transform: scale(1.25); box-shadow: none; }
   .thread .text pre { margin: 6px 0; padding: 8px 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line-2); font: 12px/1.5 var(--mono); overflow-x: auto; white-space: pre; }
   .thread .text code { font: 12px var(--mono); background: color-mix(in srgb, var(--muted) 12%, transparent); padding: 1px 4px; border-radius: 4px; }
   .approve-box { margin-top: 20px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); box-shadow: var(--shadow); }
@@ -284,6 +328,12 @@
     .toast { bottom: auto; top: 60px; }
     pre.log { font-size: 11px; max-height: 220px; }
     .oath { display: none; }
+    pre.code.diff .ln .plus { opacity: 1; left: 62px; height: 16px; width: 16px; line-height: 14px; font-size: 12px; }
+    pre.code.diff .ln .mark { left: 62px; }
+    pre.code.diff .ln .n { width: 30px; }
+    pre.code.diff .ln .n + .n { margin-right: 24px; }
+    pre.code.diff .ln.hunk { padding-left: 10px; }
+    .note, .composer { margin-left: 10px; margin-right: 10px; }
     .thread .msg-row { grid-template-columns: 1fr; gap: 4px; padding: 10px; }
     .thread .who b { display: inline; margin-right: 6px; }
     .approve-box .row { flex-wrap: wrap; }
@@ -319,9 +369,12 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const S = { prs: [], jobs: {}, config: {}, generatedAt: null, error: null,
+const S = { prs: [], jobs: {}, config: {}, generatedAt: null, error: null, picker: null,
             view: 'list', draft: null, conv: null, showLog: false, showApproved: false, logLines: [], timer: null,
-            ready: true, setup: null, setupTimer: null, setupConsumed: null };
+            ready: true, setup: null, setupTimer: null, setupConsumed: null,
+            // código completo del borrador abierto: el diff, si se enseña, qué ficheros están desplegados
+            // y en qué línea se está escribiendo un comentario propio ({fi, line} o null)
+            diff: null, showDiff: false, openFiles: new Set(), composer: null };
 
 // ------------------------------------------------------------ util
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -403,8 +456,122 @@ async function reviewAll() {
 async function openDraft(repo, number) {
   try {
     S.draft = await api('GET', `/api/drafts/${repo}/${number}`);
+    Object.assign(S, { diff: null, showDiff: false, openFiles: new Set(), composer: null });
     S.view = 'draft'; history.replaceState(null, '', `#${repo}/${number}`); render(true); window.scrollTo(0, 0);
+    // Un borrador manual es para leer el código: el diff sale abierto directamente.
+    if (!S.draft.claude && S.draft.status === 'pending') await toggleDiff();
   } catch (e) { toast(e.message, true); }
+}
+// Borrador vacío, sin Claude, para comentar el código a mano.
+async function createManual(repo, number) {
+  try {
+    await api('POST', `/api/drafts/${repo}/${number}/create`, {});
+    await openDraft(repo, number);
+    refresh(false);
+  } catch (e) { toast(e.message, true); }
+}
+
+// ------------------------------------------------------------ código completo y comentarios propios
+// Lo editado en las tarjetas (texto, marcas, resumen, elogio) pasa a S.draft antes de repintar,
+// para que abrir el código o un cuadro de comentario no lo pierda.
+function syncDraftEdits() {
+  if (!S.draft || S.draft.status !== 'pending' || !document.querySelector('.card[data-i], #summary')) return;
+  const e = collectEdits(), d = S.draft;
+  if (e.comments.length === d.comments.length) e.comments.forEach((c, i) => Object.assign(d.comments[i], c));
+  d.summary = e.summary;
+  if (e.praise && d.praise) Object.assign(d.praise, e.praise);
+}
+function repaintDraft() { syncDraftEdits(); const y = window.scrollY; render(true); window.scrollTo(0, y); }
+async function toggleDiff() {
+  S.showDiff = !S.showDiff; S.composer = null;
+  if (S.showDiff && !S.diff) {
+    const d = S.draft;
+    try {
+      S.diff = await api('GET', `/api/prs/${d.repo}/${d.number}/diff?head=${d.head}`);
+      // Desplegados de entrada: los ficheros con comentarios (o todos, si no hay ninguno).
+      const commented = new Set(d.comments.map(c => c.path));
+      S.openFiles = new Set(S.diff.files.filter(f => !commented.size || commented.has(f.path)).map(f => f.path));
+    } catch (e) { S.showDiff = false; toast(`No se pudo cargar el código: ${e.message}`, true); }
+  }
+  repaintDraft();
+}
+function fileToggled(el, fi) { const p = S.diff.files[fi].path; if (el.open) S.openFiles.add(p); else S.openFiles.delete(p); }
+function openComposer(fi, line) {
+  S.composer = { fi, line }; repaintDraft();
+  const t = document.getElementById('composer-text'); if (t) { t.focus(); t.scrollIntoView({ block: 'nearest' }); }
+}
+function closeComposer() { S.composer = null; repaintDraft(); }
+async function addOwnComment() {
+  const t = document.getElementById('composer-text'), d = S.draft, c = S.composer;
+  if (!t || !t.value.trim()) return toast('Escribe algo antes de añadir', true);
+  const path = S.diff.files[c.fi].path, body = t.value;
+  try {
+    await saveDraft(true);  // lo editado en las tarjetas, antes de que el servidor devuelva el borrador
+    S.draft = await api('POST', `/api/drafts/${d.repo}/${d.number}/comments`, { path, line: c.line, start_line: c.line, body });
+    S.composer = null; S.openFiles.add(path);
+    repaintDraft(); toast(`Comentario añadido en ${path.split('/').pop()}:${c.line}`);
+  } catch (e) { toast(e.message, true); }
+}
+async function removeOwnComment(i) {
+  const d = S.draft;
+  if (!confirm('¿Quitar este comentario tuyo del borrador?')) return;
+  try {
+    await saveDraft(true);
+    S.draft = await api('DELETE', `/api/drafts/${d.repo}/${d.number}/comments/${i}`);
+    repaintDraft(); toast('Comentario quitado');
+  } catch (e) { toast(e.message, true); }
+}
+function scrollToCard(i) {
+  const el = document.querySelector(`.card[data-i="${i}"]`); if (!el) return;
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  el.style.boxShadow = '0 0 0 3px var(--glow)'; setTimeout(() => el.style.boxShadow = '', 1500);
+}
+// Pie de cada comentario (tarjeta o nota en el diff): «tuyo» o severidad · regla.
+function commentTag(cm) {
+  return cm.source === 'me' ? '<span class="pill accent">tuyo</span>'
+    : `<span class="rule" title="interno, no se publica">${esc(cm.severity)} · ${esc(cm.rule)}</span>`;
+}
+function renderDiff() {
+  const d = S.draft, df = S.diff, ro = d.status !== 'pending';
+  if (!S.showDiff || !df) return '';
+  // comentarios por fichero y línea final (donde GitHub los pinta)
+  const at = {}; d.comments.forEach((cm, i) => { ((at[cm.path] ||= {})[cm.line] ||= []).push(i); });
+  const stat = f => `<span class="stat"><span style="color:var(--ok)">+${f.additions}</span> <span style="color:var(--bad)">−${f.deletions}</span></span>`;
+  const files = df.files.map((f, fi) => {
+    const notes = at[f.path] || {}, nNotes = Object.values(notes).reduce((a, b) => a + b.length, 0);
+    const rows = f.rows.map(r => {
+      if (r.k === '@') return `<span class="ln hunk">${esc(r.t)}</span>`;
+      const can = !ro && r.n !== null, ids = r.n !== null ? notes[r.n] : null;
+      const cls = `ln ${r.k === '+' ? 'add' : r.k === '-' ? 'del' : ''} ${can ? 'can' : ''} ${ids ? 'marked' : ''}`;
+      let html = `<span class="${cls}"><span class="n">${r.o ?? ''}</span><span class="n">${r.n ?? ''}</span>${
+        ids ? `<span class="mark" title="${ids.length} comentario(s) aquí" onclick="scrollToCard(${ids[0]})">💬</span>`
+            : can ? `<button class="plus" onclick="openComposer(${fi}, ${r.n})" title="Comentar la línea ${r.n}">+</button>` : ''
+      }<span class="t">${esc(r.t)}</span></span>`;
+      // Dentro de un <pre> los saltos de línea del HTML se ven: notas y cuadro van sin ninguno.
+      if (ids) html += ids.map(i => { const cm = d.comments[i]; return `<div class="note ${cm.source === 'me' ? 'mine' : ''}" style="${cm.enabled ? '' : 'opacity:.5'}">`
+        + `<div class="hd">${commentTag(cm)}${cm.start_line < cm.line ? `<span>líneas ${cm.start_line}-${cm.line}</span>` : ''}${cm.enabled ? '' : '<span>no se publica</span>'}<span class="spacer"></span>`
+        + `${ro ? '' : `<button class="link" onclick="scrollToCard(${i})">editar</button>`}</div><div class="text">${md(cm.body)}</div></div>`; }).join('');
+      if (S.composer && S.composer.fi === fi && S.composer.line === r.n) html += `<div class="composer">`
+        + `<textarea id="composer-text" placeholder="Tu comentario para ${esc(f.path.split('/').pop())}:${r.n}" onkeydown="if (event.key === 'Escape') closeComposer()"></textarea>`
+        + `<div class="row"><span>Se publica con los demás, en la misma review; se ancla a la línea ${r.n} del commit <code>${d.head.slice(0, 10)}</code>.</span><span class="spacer"></span>`
+        + `<button onclick="closeComposer()">Cancelar</button><button class="primary" onclick="addOwnComment()">Añadir comentario</button></div></div>`;
+      return html;
+    }).join('');
+    const status = f.status === 'added' ? '<span class="pill ok">nuevo</span>' : f.status === 'removed' ? '<span class="pill bad">borrado</span>'
+                 : f.status === 'renamed' ? `<span class="pill" title="antes ${esc(f.old_path)}">renombrado</span>` : '';
+    return `
+    <details class="file" ${S.openFiles.has(f.path) ? 'open' : ''} ontoggle="fileToggled(this, ${fi})">
+      <summary><span class="path" title="${esc(f.path)}">${esc(f.path)}</span>${nNotes ? `<span class="pill accent">💬 ${nNotes}</span>` : ''}${status}${stat(f)}</summary>
+      <pre class="code diff">${rows || '<span class="ln">(sin cambios de texto)</span>'}</pre>
+    </details>`;
+  }).join('');
+  return `
+    <div class="diffsec" id="diff">
+      <p class="lead"><span>${df.files.length} fichero${df.files.length === 1 ? '' : 's'} · <span style="color:var(--ok)">+${df.additions}</span> <span style="color:var(--bad)">−${df.deletions}</span> · diff de la PR en <code>${df.head.slice(0, 10)}</code></span>
+        ${ro ? '' : '<span>pasa por una línea añadida o de contexto y pulsa «+» para comentarla; GitHub no admite comentarios en las borradas</span>'}
+        <span class="spacer" style="flex:1"></span><a href="${esc(d.url)}/files" target="_blank" rel="noopener">ver en GitHub</a></p>
+      ${files || '<div class="empty">GitHub no devuelve cambios para este commit.</div>'}
+    </div>`;
 }
 async function openConversation(repo, number) {
   try {
@@ -426,6 +593,33 @@ async function approve(repo, number, fromConv) {
     toast(`${repo}#${number} aprobada`);
     if (fromConv) await openConversation(repo, number); else await refresh(true);
   } catch (e) { toast(e.message, true); }
+}
+// Las ocho reacciones de GitHub (mismo orden que uatu.REACTIONS).
+const REACTIONS = [['THUMBS_UP', '👍'], ['THUMBS_DOWN', '👎'], ['LAUGH', '😄'], ['HOORAY', '🎉'],
+                   ['CONFUSED', '😕'], ['HEART', '❤️'], ['ROCKET', '🚀'], ['EYES', '👀']];
+// Repinta la conversación sin perder el scroll ni el mensaje de aprobación a medio escribir.
+function repaintConv() {
+  const msg = document.getElementById('approve-msg'), text = msg ? msg.value : null, y = window.scrollY;
+  render(true);
+  const again = document.getElementById('approve-msg'); if (again && text !== null) again.value = text;
+  window.scrollTo(0, y);
+}
+function togglePicker(nodeId) { S.picker = S.picker === nodeId ? null : nodeId; repaintConv(); }
+async function react(nodeId, content, on) {
+  S.picker = null;
+  try {
+    const d = await api('POST', `/api/prs/${S.conv.repo}/${S.conv.number}/react`, { comment: nodeId, content, on });
+    for (const t of S.conv.threads) for (const m of [t.comment, ...t.replies]) if (m.node_id === nodeId) m.reactions = d.reactions;
+    repaintConv();
+  } catch (e) { toast(e.message, true); }
+}
+function reactionsBar(m) {
+  const chips = (m.reactions || []).map(r => `<button class="${r.me ? 'mine' : ''}" onclick="react('${m.node_id}', '${r.content}', ${!r.me})"
+      title="${esc(r.who.join(', '))}${r.count > r.who.length ? ' y más' : ''}${r.me ? ' · pulsa para quitar la tuya' : ''}">${r.emoji} ${r.count}</button>`);
+  const picker = S.picker === m.node_id
+    ? `<span class="picker">${REACTIONS.map(([c, e]) => `<button onclick="react('${m.node_id}', '${c}', true)" title="${c.toLowerCase().replace('_', ' ')}">${e}</button>`).join('')}</span>`
+    : `<button class="more" onclick="togglePicker('${m.node_id}')" title="reaccionar">+</button>`;
+  return `<div class="reacts">${chips.join('')}${picker}</div>`;
 }
 function backToList() { S.view = 'list'; S.draft = null; S.conv = null; history.replaceState(null, '', location.pathname); render(true); }
 
@@ -466,6 +660,12 @@ async function discard() {
   } catch (e) { toast(e.message, true); }
 }
 function toggleCard(i) { document.querySelector(`.card[data-i="${i}"]`).classList.toggle('off'); updateCount(); }
+// Desde un borrador manual: Claude revisa la PR entera y el servidor arrastra mis comentarios al nuevo borrador.
+async function askUatu() {
+  const d = S.draft;
+  try { await saveDraft(true); await review(d.repo, d.number, true); await refresh(true); backToList(); }
+  catch (e) { toast(e.message, true); }
+}
 function autosize(t) { t.style.height = 'auto'; t.style.height = (t.scrollHeight + 2) + 'px'; }
 function updateCount() {
   const n = [...document.querySelectorAll('.card[data-i]')].filter(c => c.querySelector('input').checked && c.querySelector('textarea').value.trim()).length;
@@ -685,7 +885,7 @@ function statusCell(pr) {
   if (job && job.status === 'queued') out.push('<span class="pill accent">en cola</span>');
   else if (job && job.status === 'running') out.push(`<span class="pill accent busy">revisando desde ${job.started_at.slice(11, 16)}</span>`);
   if (d && d.status === 'pending') {
-    out.push(`<span class="pill warn">borrador: ${d.comments} com.${d.praise ? ' + elogio' : ''}${d.stale ? ' · obsoleto' : ''}</span>`);
+    out.push(`<span class="pill warn">borrador${d.manual ? ' manual' : ''}: ${d.comments} com.${d.mine ? ` (${d.mine} tuyo${d.mine === 1 ? '' : 's'})` : ''}${d.praise ? ' + elogio' : ''}${d.stale ? ' · obsoleto' : ''}</span>`);
   } else if (pr.status === 'al-dia') {
     const l = pr.last; const what = l.status === 'discarded' ? 'descartada' : l.status === 'reviewed' ? `${l.findings} com.` : l.status;
     out.push(`<span class="pill ok">al día · ${what}</span>`);
@@ -718,6 +918,8 @@ function actionsCell(pr) {
   // Aprobar aparece cuando UATU ya revisó el commit actual, o cuando han contestado a mis
   // comentarios aunque haya commits posteriores sin revisar; nunca si ya está aprobada.
   if (pr.can_approve) out.push(`<button class="ok" onclick="approve(${r})" title="${unreviewedCommits(pr) ? 'Review APPROVE sobre el commit actual, que UATU no ha revisado: te fías de las respuestas' : 'Review APPROVE sobre el commit actual'}">Aprobar</button>`);
+  if (!(d && d.status === 'pending'))
+    out.push(`<button class="link" onclick="createManual(${r})" title="Borrador vacío, sin Claude: lees el código completo y añades tus comentarios">revisar a mano</button>`);
   if (pr.conversation && pr.conversation.threads)
     out.push(`<button class="link" onclick="openConversation(${r})">${pr.conversation.replies ? 'respuestas' : 'hilos'}</button>`);
   if (d && d.status !== 'pending') out.push(`<button class="link" onclick="openDraft(${r})">ver ${d.status === 'published' ? 'publicado' : 'descartado'}</button>`);
@@ -749,7 +951,7 @@ function renderList() {
         <td class="num"><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a></td>
         <td><div class="title">${esc(pr.title)}</div>
             <div class="meta">${esc(pr.author)} · generado ${esc(pr.draft.created_at.slice(5, 16))}${pr.draft.cost_usd != null ? ` · ${pr.draft.cost_usd.toFixed(2)} USD` : ''}</div>${gistLine(pr)}</td>
-        <td><span class="pill warn">${pr.draft.comments} de ${pr.draft.total} com.${pr.draft.praise ? ' + elogio' : ''}${pr.draft.stale ? ' · obsoleto' : ''}</span></td>
+        <td><span class="pill warn">${pr.draft.manual ? 'manual · ' : ''}${pr.draft.comments} de ${pr.draft.total} com.${pr.draft.mine ? ` (${pr.draft.mine} tuyo${pr.draft.mine === 1 ? '' : 's'})` : ''}${pr.draft.praise ? ' + elogio' : ''}${pr.draft.stale ? ' · obsoleto' : ''}</span></td>
         <td class="actions">${btnset([`<button class="primary" onclick="openDraft('${pr.repo}', ${pr.number})">Ver borrador</button>`])}</td>
       </tr>`).join('')}</tbody></table>`
     : `<div class="empty quote" style="margin-top:8px"><em>«Observo todo lo que ocurre aquí, pero no interfiero.»</em>No hay borradores pendientes. Pulsa «Revisar» en una PR para que el Vigilante genere uno.</div>`);
@@ -807,21 +1009,27 @@ function renderDraft() {
   const d = S.draft, pr = S.prs.find(p => p.key === `${d.repo}#${d.number}`);
   const stale = pr && pr.head !== d.head; d.stale = stale;
   const ro = d.status !== 'pending';
-  const scope = d.mode === 'full' ? 'PR completa' : `delta ${d.last_sha.slice(0, 10)}..${d.head.slice(0, 10)}`;
+  const manual = !d.claude;
+  const scope = manual ? 'revisión manual, sin Claude' : d.mode === 'full' ? 'PR completa' : `delta ${d.last_sha.slice(0, 10)}..${d.head.slice(0, 10)}`;
   const c = d.claude || {};
+  const mine = d.comments.filter(cm => cm.source === 'me').length;
+  const diffBtn = `<button onclick="toggleDiff()" title="El diff completo de la PR en el commit del borrador, para leerlo y añadir comentarios tuyos">${S.showDiff ? 'Ocultar el código' : 'Ver el código completo'}</button>`;
   let html = `
     <button class="link" onclick="backToList()">← Volver a la lista</button>
     <div class="draft-head" style="margin-top:10px">
       <h2><a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.repo)}#${d.number}</a> · ${esc(d.title)}</h2>
       <div class="meta"><span>${esc(d.author)}</span><span><code>${esc(d.head_ref)}</code> → ${esc(d.base_ref)}</span>
         <span>${scope}</span>${d.lines_changed != null ? `<span>${d.lines_changed} líneas</span>` : ''}<span>commit <code>${d.head.slice(0, 10)}</code></span>
-        <span>generado ${esc(d.created_at)}</span>${c.cost_usd != null ? `<span>${c.turns} turnos · ${c.cost_usd.toFixed(2)} USD</span>` : ''}</div>
+        <span>${manual ? 'creado' : 'generado'} ${esc(d.created_at)}</span>${c.cost_usd != null ? `<span>${c.turns} turnos · ${c.cost_usd.toFixed(2)} USD</span>` : ''}${mine ? `<span>${mine} comentario${mine === 1 ? '' : 's'} tuyo${mine === 1 ? '' : 's'}</span>` : ''}</div>
       ${ro ? `<div class="banner ok">Este borrador ya está ${d.status === 'published' ? `publicado (${esc(d.published_at)}, ${d.published_comments} comentarios)` : `descartado (${esc(d.discarded_at)})`}. Sólo lectura.${d.status === 'published' ? ` <button class="link" onclick="openConversation('${d.repo}', ${d.number})">Ver respuestas</button>` : ''}</div>` : ''}
       ${!ro && stale ? `<div class="banner warn">La PR tiene commits nuevos desde que se generó este borrador. Puedes publicarlo igual (los comentarios se anclan al commit revisado) o volver a la lista y revisar el delta.</div>` : ''}
       ${renderExplanation(d.explanation)}
       <div style="margin-top:12px"><label class="rule">Resumen (cuerpo de la review; normalmente vacío)</label>
         <textarea id="summary" ${ro ? 'readonly' : ''} style="min-height:44px" oninput="autosize(this)">${esc(d.summary)}</textarea></div>
-    </div>`;
+      <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">${diffBtn}
+        <span class="rule" style="color:var(--muted);font-size:12px">${ro ? 'el diff de la PR tal y como se revisó' : manual ? 'aquí no hay nada de Claude: lee el código y comenta lo que veas' : 'para leer toda la PR y añadir comentarios tuyos donde UATU no ha dicho nada'}</span></div>
+    </div>
+    ${renderDiff()}`;
   const pr_ = d.praise;
   if (pr_ && pr_.body) {
     const why = pr_.gate === 'cooldown' ? 'apartado: ya hubo un elogio a esta persona hace poco' : pr_.gate === 'rate' ? 'apartado por la frecuencia configurada; márcalo si quieres mandarlo' : 'incluido';
@@ -835,7 +1043,9 @@ function renderDraft() {
       <div class="body"><textarea id="praise-body" ${ro ? 'readonly' : ''} oninput="updateCount(); autosize(this)">${esc(pr_.body)}</textarea></div>
     </div>`;
   }
-  if (!d.comments.length) html += `<div class="empty" style="margin-top:14px">Claude no encontró nada que comentar.${pr_ && pr_.body ? ' Puedes publicar sólo el elogio, o' : ' Puedes'} descartar el borrador para dar la PR por revisada.</div>`;
+  if (!d.comments.length) html += `<div class="empty" style="margin-top:14px">${manual
+    ? 'Todavía no hay comentarios: ábrelos desde el código con «+». Si no ves nada que decir, descarta el borrador para dar la PR por revisada.'
+    : `Claude no encontró nada que comentar.${pr_ && pr_.body ? ' Puedes publicar sólo el elogio, o' : ' Puedes'} descartar el borrador para dar la PR por revisada.`}</div>`;
   html += d.comments.map((cm, i) => {
     const rng = cm.start_line < cm.line ? `${cm.start_line}-${cm.line}` : cm.line;
     const code = (cm.context || []).map(r => `<span class="ln ${r.hit ? 'hit' : ''}"><span class="n">${r.n}</span>${esc(r.text)}</span>`).join('') || '<span class="ln">(sin contexto)</span>';
@@ -843,7 +1053,8 @@ function renderDraft() {
     <div class="card ${cm.enabled ? '' : 'off'}" data-i="${i}">
       <div class="bar">
         <span class="path"><a href="${esc(d.url)}/files" target="_blank" rel="noopener">${esc(cm.path)}</a>:${rng}</span>
-        <span class="rule" title="interno, no se publica">${esc(cm.severity)} · ${esc(cm.rule)}</span>
+        ${commentTag(cm)}
+        ${cm.source === 'me' && !ro ? `<button class="link" style="font-size:12px" onclick="removeOwnComment(${i})">quitar</button>` : ''}
         <label><input type="checkbox" ${cm.enabled ? 'checked' : ''} ${ro ? 'disabled' : ''} onchange="toggleCard(${i})"> publicar</label>
       </div>
       <pre class="code">${code}</pre>
@@ -855,6 +1066,7 @@ function renderDraft() {
       <button class="danger" onclick="discard()">Descartar borrador</button>
       <span class="hint">Uatu sólo observa: nada llega a GitHub hasta que tú decides intervenir. Descartar da la PR por revisada hasta este commit.</span>
       <span class="spacer"></span>
+      ${manual ? `<button onclick="askUatu()" title="Revisa la PR entera con Claude; tus comentarios se conservan en el nuevo borrador">Pedir revisión a UATU</button>` : ''}
       <button onclick="saveDraft()">Guardar cambios</button>
       <button id="btn-publish" class="ok" onclick="publish()">Publicar</button>
     </div>`;
@@ -882,7 +1094,7 @@ function renderConversation() {
     const row = (m, isNew) => `
       <div class="msg-row ${m.author === me ? 'me' : ''} ${isNew ? 'new' : ''}">
         <div class="who"><b>${esc(m.author)}</b><a href="${esc(m.url)}" target="_blank" rel="noopener" title="abrir en GitHub">${esc(fmtWhen(m.at))}</a></div>
-        <div class="text">${md(m.body)}</div>
+        <div class="text">${md(m.body)}${reactionsBar(m)}</div>
       </div>`;
     return `
     <div class="card thread">
@@ -899,7 +1111,7 @@ function renderConversation() {
       ${c.can_approve
         ? `<div>Si las respuestas te convencen, aprueba desde aquí: sale como review <b>APPROVE</b> de ${esc(me)} sobre <code>${c.head.slice(0, 10)}</code>, ${unreviewedCommits(c) ? `que UATU <b>no ha revisado</b> (la última revisión llegó hasta <code>${c.last.sha.slice(0, 10)}</code>); si prefieres verlo antes, vuelve a la lista y pulsa «Revisar delta»` : 'el commit que UATU ya revisó'}.</div>
            <div class="row"><input id="approve-msg" placeholder="Mensaje opcional (p. ej. «Gracias por los cambios, LGTM»)"><button class="ok" onclick="approve('${c.repo}', ${c.number}, true)">Aprobar PR</button></div>`
-        : `<div style="color:var(--muted);font-size:13px">${a ? 'Ya está aprobada. ' : ''}Para contestar a los hilos${a ? '' : ' o seguir la PR'}, ve a <a href="${esc(c.url)}" target="_blank" rel="noopener">GitHub</a>.</div>`}
+        : `<div style="color:var(--muted);font-size:13px">${a ? 'Ya está aprobada. ' : ''}Para contestar con texto a los hilos${a ? '' : ' o seguir la PR'}, ve a <a href="${esc(c.url)}" target="_blank" rel="noopener">GitHub</a>.</div>`}
     </div>`;
   return html;
 }

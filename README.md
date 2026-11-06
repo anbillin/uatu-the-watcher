@@ -63,6 +63,11 @@ en primer plano que abra el navegador: `python3 server.py`.
    descripción del autor no cuenta y, en un delta, qué cambió desde la última revisión) y después
    enseña cada comentario con el código señalado. Puedes editar el texto,
    desmarcar los que no quieras publicar y tocar el resumen. **Guardar cambios** lo persiste.
+   **Ver el código completo** carga el diff entero de la PR (en el commit del borrador, por
+   ficheros, con los comentarios de UATU marcados en su línea); pasando por una línea añadida o de
+   contexto aparece un «+» para añadir un **comentario tuyo**, que entra en el borrador como una
+   tarjeta más (etiqueta *tuyo*, se puede editar o quitar) y se publica con los demás en la misma
+   review. GitHub no admite comentarios en líneas borradas, así que ahí no hay «+».
 4. **Publicar** manda la review a GitHub (pide confirmación). **Descartar** no publica nada y
    da la PR por revisada hasta ese commit, igual que si no hubiera habido hallazgos.
 
@@ -70,6 +75,13 @@ Una PR con borrador pendiente para su commit actual no se vuelve a revisar (el s
 lo rechaza): primero publícalo o descártalo. «Revisar de nuevo» (PR completa) sí lo
 sobrescribe. Los trabajos en cola viven en memoria: reiniciar el servidor los pierde,
 aunque los borradores ya generados quedan en disco.
+
+**Revisar a mano** (enlace en la lista, en cualquier PR sin borrador pendiente) crea un borrador vacío
+sin pasar por Claude y lo abre con el código desplegado: comentas lo que veas y publicas. Publicarlo o
+descartarlo deja la PR como revisada hasta ese commit, igual que con un borrador de UATU. Si después
+quieres también la opinión de Claude, **Pedir revisión a UATU** (o «Revisar de nuevo» desde la lista)
+revisa la PR entera y arrastra tus comentarios al borrador nuevo; en delta no, porque cambia el commit
+al que se anclan.
 
 Los borradores publicados o descartados se pueden seguir consultando en sólo lectura. La URL
 `#repo/número` abre un borrador directamente; `#repo/número/respuestas`, su conversación.
@@ -85,8 +97,9 @@ La lista lee de GitHub, en una consulta GraphQL por repo, dos cosas más por PR:
 - **Respuestas**: los hilos que empiezan con un comentario mío y lo que han contestado en ellos.
   La etiqueta «N respuestas · M nuevas» se pulsa para abrir la conversación; «nuevas» son las
   posteriores a la última vez que la abrí (`state/seen.json`). Cada hilo marca si está resuelto,
-  si el código ya cambió (*obsoleto*) y si la última palabra no es mía (*por contestar*). Desde
-  ahí no se contesta: para eso, GitHub.
+  si el código ya cambió (*obsoleto*) y si la última palabra no es mía (*por contestar*). Cada
+  mensaje enseña sus reacciones (quién, al pasar el ratón) y con «+» se pone una de las ocho de
+  GitHub (👍 👎 😄 🎉 😕 ❤️ 🚀 👀); pulsar la propia la quita. Para contestar con texto, GitHub.
 
 El botón **Aprobar** (en la lista y al pie de la conversación, con un mensaje opcional) manda una
 review `APPROVE` sobre el commit actual, y es la única review que UATU envía que no es `COMMENT`.
@@ -116,6 +129,7 @@ publicar reviews con tu cuenta, así que sólo en redes de confianza. Las llamad
 | Re-revisión | sólo el delta de commits desde la última revisión; si hubo force-push, la PR entera |
 | Tipo de review | los borradores salen siempre como `COMMENT`; `APPROVE` sólo a mano desde el botón «Aprobar», y nunca request-changes |
 | Sin hallazgos | se descarta el borrador y se anota en el estado local |
+| Comentarios propios | `source: "me"` en el borrador; se anclan al commit del borrador y sólo en líneas añadidas o de contexto del diff (lo que acepta GitHub); el diff se pide a GitHub (`compare`), sin tocar el clon |
 | Topes | 3 PRs por «Revisar pendientes» · 3000 líneas cambiadas por PR · 12 comentarios por review |
 
 ## Cómo sabe `claude` las normas de cada repo
