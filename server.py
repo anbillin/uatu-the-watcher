@@ -419,12 +419,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_approve(self, repo, number):
         """Review APPROVE sobre el commit actual. Sólo si UATU ya revisó ese commit o hay
-        respuestas a mis comentarios (uatu.can_approve decide)."""
+        respuestas a mis comentarios (uatu.can_approve decide). Con `discard_draft`, un borrador
+        pendiente para ese commit no bloquea: se aprueba sin publicarlo y se descarta."""
         if repo not in uatu.CONFIG["repos"]:
             raise ApiError(400, "repo inválido")
         body = self.read_body()
         try:
-            res = uatu.approve_pr(repo, number, str(body.get("message") or ""))
+            res = uatu.approve_pr(repo, number, str(body.get("message") or ""), bool(body.get("discard_draft")))
         except ValueError as err:
             raise ApiError(409, str(err))
         invalidate()

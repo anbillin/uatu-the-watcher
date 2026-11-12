@@ -70,6 +70,9 @@ en primer plano que abra el navegador: `python3 server.py`.
    review. GitHub no admite comentarios en líneas borradas, así que ahí no hay «+».
 4. **Publicar** manda la review a GitHub (pide confirmación). **Descartar** no publica nada y
    da la PR por revisada hasta ese commit, igual que si no hubiera habido hallazgos.
+   **Aprobar sin publicar** hace lo mismo que descartar y, además, manda una review `APPROVE`
+   sobre ese commit (con un mensaje opcional): para cuando has leído el borrador y la PR te parece
+   bien tal cual, sin mandar los comentarios. Sólo aparece si el borrador es del commit actual.
 
 Una PR con borrador pendiente para su commit actual no se vuelve a revisar (el servidor
 lo rechaza): primero publícalo o descártalo. «Revisar de nuevo» (PR completa) sí lo
@@ -105,6 +108,8 @@ El botón **Aprobar** (en la lista y al pie de la conversación, con un mensaje 
 review `APPROVE` sobre el commit actual, y es la única review que UATU envía que no es `COMMENT`.
 Aparece si UATU ya revisó ese commit (estado *al día*, publicado o descartado), no hay un
 borrador pendiente para él y no está ya aprobada; el servidor vuelve a comprobarlo antes de enviar.
+Con un borrador pendiente, la vía es «Aprobar sin publicar» desde el propio borrador (o
+`approve --discard-draft` en la CLI): descarta el borrador y aprueba en un paso.
 Con commits sin revisar hay dos casos: si nadie ha contestado a mis comentarios, primero «Revisar
 delta»; si hay respuestas, se puede aprobar igualmente (las respuestas bastan para decidir) y la
 web avisa de que el commit aprobado no lo ha revisado UATU.
@@ -127,7 +132,7 @@ publicar reviews con tu cuenta, así que sólo en redes de confianza. Las llamad
 | Identidad | quien ejecuta: su sesión de `gh`; usuario, nombre y voz en `profile/` |
 | PRs elegibles | abiertas, no draft, autor ≠ yo, autor ∉ bots |
 | Re-revisión | sólo el delta de commits desde la última revisión; si hubo force-push, la PR entera |
-| Tipo de review | los borradores salen siempre como `COMMENT`; `APPROVE` sólo a mano desde el botón «Aprobar», y nunca request-changes |
+| Tipo de review | los borradores salen siempre como `COMMENT`; `APPROVE` sólo a mano desde los botones «Aprobar» y «Aprobar sin publicar», y nunca request-changes |
 | Sin hallazgos | se descarta el borrador y se anota en el estado local |
 | Comentarios propios | `source: "me"` en el borrador; se anclan al commit del borrador y sólo en líneas añadidas o de contexto del diff (lo que acepta GitHub); el diff se pide a GitHub (`compare`), sin tocar el clon |
 | Topes | 3 PRs por «Revisar pendientes» · 3000 líneas cambiadas por PR · 12 comentarios por review |
@@ -174,6 +179,7 @@ python3 uatu.py publish gofre 1640        # publica un borrador existente
 python3 uatu.py run --repo tortilla --max 2   # borradores para las pendientes, sin publicar
 python3 uatu.py replies gofre 1640        # respuestas a mis comentarios en esa PR
 python3 uatu.py approve gofre 1640 -m "LGTM"  # APPROVE, con las mismas condiciones que el botón
+python3 uatu.py approve gofre 1640 --discard-draft  # aprueba sin publicar el borrador pendiente (lo descarta)
 python3 uatu.py setup                     # comprobaciones y estado del perfil
 python3 uatu.py setup --import-voice      # destila la voz del historial y pregunta antes de guardar
 ```

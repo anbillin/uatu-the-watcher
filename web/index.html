@@ -659,6 +659,21 @@ async function discard() {
     await refresh(true); backToList();
   } catch (e) { toast(e.message, true); }
 }
+// Aprobar desde el borrador sin publicar sus comentarios: el borrador se descarta (la PR queda
+// como revisada hasta este commit) y sale un APPROVE sobre el commit actual. Un solo diálogo:
+// el mensaje es opcional y cancelar aborta.
+async function approveFromDraft() {
+  const d = S.draft;
+  const n = [...document.querySelectorAll('.card[data-i]')].filter(c => c.querySelector('input').checked && c.querySelector('textarea').value.trim()).length;
+  const what = n ? `sin publicar ${n === 1 ? 'el comentario' : `los ${n} comentarios`} del borrador` : 'sin publicar nada';
+  const message = prompt(`Aprobar ${d.repo}#${d.number} como ${S.config.me} ${what}?\n\nEl borrador se descarta y sale una review APPROVE sobre el commit ${d.head.slice(0, 10)}.\n\nMensaje opcional (vacío para aprobar sin texto):`, '');
+  if (message === null) return;
+  try {
+    await api('POST', `/api/prs/${d.repo}/${d.number}/approve`, { message: message.trim(), discard_draft: true });
+    toast(`${d.repo}#${d.number} aprobada sin publicar comentarios`);
+    await refresh(true); backToList();
+  } catch (e) { toast(e.message, true); }
+}
 function toggleCard(i) { document.querySelector(`.card[data-i="${i}"]`).classList.toggle('off'); updateCount(); }
 // Desde un borrador manual: Claude revisa la PR entera y el servidor arrastra mis comentarios al nuevo borrador.
 async function askUatu() {
@@ -1064,7 +1079,8 @@ function renderDraft() {
   if (!ro) html += `
     <div class="footer">
       <button class="danger" onclick="discard()">Descartar borrador</button>
-      <span class="hint">Uatu sólo observa: nada llega a GitHub hasta que tú decides intervenir. Descartar da la PR por revisada hasta este commit.</span>
+      ${stale ? '' : `<button onclick="approveFromDraft()" title="Descarta el borrador sin publicar sus comentarios y manda una review APPROVE sobre este commit">Aprobar sin publicar</button>`}
+      <span class="hint">Uatu sólo observa: nada llega a GitHub hasta que tú decides intervenir. Descartar da la PR por revisada hasta este commit${stale ? '' : '; aprobar sin publicar, además, manda el APPROVE'}.</span>
       <span class="spacer"></span>
       ${manual ? `<button onclick="askUatu()" title="Revisa la PR entera con Claude; tus comentarios se conservan en el nuevo borrador">Pedir revisión a UATU</button>` : ''}
       <button onclick="saveDraft()">Guardar cambios</button>

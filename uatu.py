@@ -10,7 +10,7 @@ Uso:
   uatu.py run [--repo gofre] [--max N]      # borradores para las pendientes
   uatu.py publish <repo> <pr>               # publica un borrador existente
   uatu.py replies <repo> <pr>               # respuestas a mis comentarios
-  uatu.py approve <repo> <pr> [-m msg]      # APPROVE, sólo si ya está revisada al día
+  uatu.py approve <repo> <pr> [-m msg] [--discard-draft]  # APPROVE; --discard-draft aprueba sin publicar el borrador
   uatu.py setup [--import-voice]            # comprobaciones y perfil personal (profile/)
 """
 import argparse
@@ -520,38 +520,61 @@ def has_replies(conv: dict) -> bool:
     return any(r["author"] != ME for t in conv.get("threads", []) for r in t["replies"])
 
 
-def can_approve(pr: dict, entry, conv: dict):
+def pending_draft_for_head(pr: dict):
+    """El borrador pendiente anclado al commit actual de la PR, si lo hay."""
+    draft = load_draft(pr["repo"], pr["number"])
+    if draft and draft["status"] == "pending" and draft["head"] == pr["headRefOid"]:
+        return draft
+    return None
+
+
+def can_approve(pr: dict, entry, conv: dict, discard_pending: bool = False):
     """Se aprueba lo que UATU ya revisó hasta su commit actual y no está aprobado. Si han
     contestado a mis comentarios, también con commits posteriores sin revisar: las respuestas
-    bastan para decidir, y el APPROVE sale igualmente sobre el commit actual."""
+    bastan para decidir, y el APPROVE sale igualmente sobre el commit actual.
+
+    Con `discard_pending`, un borrador pendiente para el commit actual no bloquea: se da por
+    revisado (el borrador se descartará sin publicar nada) y se aprueba igualmente."""
     if conv["approval"]:
         return False, "ya está aprobada"
+    pending = pending_draft_for_head(pr)
+    if pending:
+        if not discard_pending:
+            return False, "hay un borrador pendiente para este commit: publícalo, descártalo o apruébala sin publicarlo"
+        entry = {"sha": pending["head"]}
     if not entry:
         return False, "UATU no ha revisado esta PR"
     if entry["sha"] != pr["headRefOid"] and not has_replies(conv):
         return False, "hay commits sin revisar y nadie ha contestado: revisa el delta antes de aprobar"
-    draft = load_draft(pr["repo"], pr["number"])
-    if draft and draft["status"] == "pending" and draft["head"] == pr["headRefOid"]:
-        return False, "hay un borrador pendiente para este commit: publícalo o descártalo"
     return True, None
 
 
-def approve_pr(repo: str, number: int, message: str = "") -> dict:
+def approve_pr(repo: str, number: int, message: str = "", discard_pending: bool = False) -> dict:
     """Manda una review APPROVE sobre el commit actual. Es la única review que no es COMMENT,
-    y siempre la pide una persona desde la web o la CLI."""
+    y siempre la pide una persona desde la web o la CLI.
+
+    Con `discard_pending`, si hay un borrador pendiente para ese commit se aprueba sin publicar
+    sus comentarios: primero sale el APPROVE y después se descarta el borrador, que deja la PR
+    como revisada hasta ese commit."""
     pr = get_pr(repo, number)
     key = state_key(repo, number)
     conv = fetch_conversations(repo, [number]).get(number) or {"approval": None, "threads": []}
-    ok, why = can_approve(pr, load_state().get(key), conv)
+    ok, why = can_approve(pr, load_state().get(key), conv, discard_pending)
     if not ok:
         raise ValueError(why)
+    pending = pending_draft_for_head(pr) if discard_pending else None
     payload = {"commit_id": pr["headRefOid"], "event": "APPROVE", "body": (message or "").strip()}
     sh(["gh", "api", "-X", "POST", f"repos/{ORG}/{repo}/pulls/{number}/reviews", "--input", "-"],
        input_text=json.dumps(payload))
+    skipped = ""
+    if pending:
+        discard_draft(pending)
+        n = len([c for c in pending["comments"] if c.get("enabled", True) and (c.get("body") or "").strip()])
+        skipped = f" sin publicar el borrador ({n} comentario{'' if n == 1 else 's'} descartado{'' if n == 1 else 's'})"
     entry = load_state().get(key)
     unreviewed = " (commits sin revisar por UATU)" if entry and entry["sha"] != pr["headRefOid"] else ""
-    log(f"{key}: aprobada en {pr['headRefOid'][:10]}{unreviewed}{' con mensaje' if payload['body'] else ''} · {pr['url']}")
-    return {"key": key, "sha": pr["headRefOid"], "at": now()}
+    log(f"{key}: aprobada en {pr['headRefOid'][:10]}{unreviewed}{skipped}{' con mensaje' if payload['body'] else ''} · {pr['url']}")
+    return {"key": key, "sha": pr["headRefOid"], "at": now(), "discarded_draft": bool(pending)}
 
 
 def react(comment_node_id: str, content: str, on: bool) -> list:
@@ -1378,10 +1401,10 @@ def cmd_publish(args) -> None:
 
 def cmd_approve(args) -> None:
     try:
-        res = approve_pr(args.repo, args.pr, args.message or "")
+        res = approve_pr(args.repo, args.pr, args.message or "", args.discard_draft)
     except ValueError as err:
         sys.exit(f"{args.repo}#{args.pr}: no se aprueba, {err}")
-    print(f"{res['key']} aprobada en {res['sha'][:10]}")
+    print(f"{res['key']} aprobada en {res['sha'][:10]}" + (" (borrador descartado sin publicar)" if res["discarded_draft"] else ""))
 
 
 def reactions_text(msg: dict) -> str:
@@ -1472,6 +1495,8 @@ def main() -> None:
     p.add_argument("repo")
     p.add_argument("pr", type=int)
     p.add_argument("-m", "--message", help="cuerpo opcional de la review de aprobación")
+    p.add_argument("--discard-draft", action="store_true",
+                   help="si hay un borrador pendiente para el commit actual, aprueba sin publicar sus comentarios y lo descarta")
     p.set_defaults(fn=cmd_approve)
     p = sub.add_parser("replies", help="enseña las respuestas a mis comentarios en una PR")
     p.add_argument("repo")
