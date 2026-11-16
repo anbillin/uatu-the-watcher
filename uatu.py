@@ -839,6 +839,18 @@ def render_prompt(pr: dict, head: str, diff_file: Path, delta_file: Path, mode: 
     return text
 
 
+def claude_error(res) -> RuntimeError:
+    """Error legible cuando `claude` sale con código != 0. Con `--output-format json` el motivo
+    (modelo no disponible, presupuesto, etc.) viene en stdout, no en stderr."""
+    detail = res.stderr.strip()
+    if not detail:
+        try:
+            detail = str((json.loads(res.stdout) or {}).get("result") or "")
+        except (ValueError, AttributeError):
+            detail = res.stdout.strip()
+    return RuntimeError(f"claude salió con {res.returncode}: {detail.strip()[:2000]}")
+
+
 def run_claude(repo_path: Path, prompt: str, pr: dict, schema=None, tag: str = ""):
     """Devuelve (salida estructurada, metadatos de la ejecución). `schema` es el de la salida
     (por defecto el de una review); `tag` distingue los artefactos en state/work/."""
@@ -865,7 +877,7 @@ def run_claude(repo_path: Path, prompt: str, pr: dict, schema=None, tag: str = "
     raw_path = WORK_DIR / f"{pr['repo']}-{pr['number']}{tag}-claude.json"
     raw_path.write_text(res.stdout)
     if res.returncode != 0:
-        raise RuntimeError(f"claude salió con {res.returncode}: {res.stderr.strip()[:2000]}")
+        raise claude_error(res)
     data = json.loads(res.stdout)
     if data.get("is_error"):
         raise RuntimeError(f"claude devolvió error: {data.get('result')}")
@@ -1408,7 +1420,7 @@ def run_claude_text(prompt: str, label: str):
     log(f"  claude redactando {label} ...")
     res = subprocess.run(cmd, cwd=WORK_DIR, text=True, capture_output=True)
     if res.returncode != 0:
-        raise RuntimeError(f"claude salió con {res.returncode}: {res.stderr.strip()[:2000]}")
+        raise claude_error(res)
     data = json.loads(res.stdout)
     if data.get("is_error"):
         raise RuntimeError(f"claude devolvió error: {data.get('result')}")
