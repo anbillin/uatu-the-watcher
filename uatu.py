@@ -11,6 +11,8 @@ Uso:
   uatu.py publish <repo> <pr>               # publica un borrador existente
   uatu.py replies <repo> <pr>               # respuestas a mis comentarios
   uatu.py approve <repo> <pr> [-m msg] [--discard-draft]  # APPROVE; --discard-draft aprueba sin publicar el borrador
+  uatu.py mine                              # mis PRs en borrador y su revisión propia
+  uatu.py self-review <repo> <pr> [--show] [-o fichero]  # revisa mi PR y escribe el texto para el agente
   uatu.py setup [--import-voice]            # comprobaciones y perfil personal (profile/)
 """
 import argparse
@@ -40,7 +42,9 @@ LOGS_DIR = ROOT / "logs"
 STATE_FILE = STATE_DIR / "reviewed.json"
 PRAISE_FILE = STATE_DIR / "praise.json"
 SEEN_FILE = STATE_DIR / "seen.json"   # última respuesta vista por PR, para marcar las nuevas
+SELF_DIR = STATE_DIR / "self"         # revisiones de mis propias PRs en borrador (texto para un agente)
 PROMPT_FILE = ROOT / "prompts" / "review-pr.md"
+SELF_PROMPT_FILE = ROOT / "prompts" / "self-review.md"
 VOICE_EXAMPLE_FILE = ROOT / "prompts" / "voice.example.md"
 VOICE_IMPORT_PROMPT = ROOT / "prompts" / "voice-from-history.md"
 VOICE_PREVIEW_PROMPT = ROOT / "prompts" / "voice-preview.md"
@@ -88,6 +92,34 @@ FINDINGS_SCHEMA = {
         },
     },
     "required": ["summary", "praise", "explanation", "findings"],
+}
+
+# Revisión de una PR mía: cada hallazgo es una orden de trabajo para un agente de código.
+SELF_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "overview": {"type": "string"},
+        "general": {"type": "array", "items": {"type": "string"}},
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "start_line": {"type": "integer"},
+                    "line": {"type": "integer"},
+                    "severity": {"type": "string", "enum": ["must", "should", "nit"]},
+                    "rule": {"type": "string"},
+                    "agreement": {"type": "string", "enum": [""] + AGREEMENT_IDS},
+                    "title": {"type": "string"},
+                    "problem": {"type": "string"},
+                    "fix": {"type": "string"},
+                },
+                "required": ["path", "start_line", "line", "severity", "rule", "agreement", "title", "problem", "fix"],
+            },
+        },
+    },
+    "required": ["overview", "general", "findings"],
 }
 
 
@@ -302,21 +334,26 @@ def draft_summary(draft: dict, head: str) -> dict:
 PR_FIELDS = "number,title,body,author,isDraft,headRefName,headRefOid,baseRefName,url,updatedAt,additions,deletions"
 
 
-def list_candidates(repo: str) -> list:
+def list_open(repo: str) -> list:
+    """Todas las PRs abiertas del repo (borradores incluidos), de la más reciente a la más antigua."""
     prs = gh_json(
         ["pr", "list", "--state", "open", "--limit", "100", "--json", PR_FIELDS], repo
     )
-    excluded = set(CONFIG.get("exclude_authors", [])) | {ME}
-    out = []
     for pr in prs:
-        if pr["isDraft"]:
-            continue
-        if pr["author"]["login"] in excluded:
-            continue
         pr["repo"] = repo
-        out.append(pr)
-    out.sort(key=lambda p: p["updatedAt"], reverse=True)
-    return out
+    prs.sort(key=lambda p: p["updatedAt"], reverse=True)
+    return prs
+
+
+def list_candidates(repo: str) -> list:
+    """Las PRs que revisa UATU para el equipo: abiertas, no draft, de otros y no de bots."""
+    excluded = set(CONFIG.get("exclude_authors", [])) | {ME}
+    return [pr for pr in list_open(repo) if not pr["isDraft"] and pr["author"]["login"] not in excluded]
+
+
+def list_mine(repo: str) -> list:
+    """Mis PRs en borrador: las que reviso para mí, antes de pedir revisión al equipo."""
+    return [pr for pr in list_open(repo) if pr["isDraft"] and pr["author"]["login"] == ME]
 
 
 def get_pr(repo: str, number: int) -> dict:
@@ -520,12 +557,10 @@ def has_replies(conv: dict) -> bool:
     return any(r["author"] != ME for t in conv.get("threads", []) for r in t["replies"])
 
 
-def pending_draft_for_head(pr: dict):
-    """El borrador pendiente anclado al commit actual de la PR, si lo hay."""
+def pending_draft(pr: dict):
+    """El borrador pendiente de la PR, si lo hay (anclado al commit actual o a uno anterior)."""
     draft = load_draft(pr["repo"], pr["number"])
-    if draft and draft["status"] == "pending" and draft["head"] == pr["headRefOid"]:
-        return draft
-    return None
+    return draft if draft and draft["status"] == "pending" else None
 
 
 def can_approve(pr: dict, entry, conv: dict, discard_pending: bool = False):
@@ -533,15 +568,16 @@ def can_approve(pr: dict, entry, conv: dict, discard_pending: bool = False):
     contestado a mis comentarios, también con commits posteriores sin revisar: las respuestas
     bastan para decidir, y el APPROVE sale igualmente sobre el commit actual.
 
-    Con `discard_pending`, un borrador pendiente para el commit actual no bloquea: se da por
-    revisado (el borrador se descartará sin publicar nada) y se aprueba igualmente."""
+    Con `discard_pending` se aprueba desde un borrador pendiente sin publicarlo: quien lo pide
+    ya ha leído el borrador, así que no bloquea ni el borrador ni que la PR tenga commits
+    posteriores (la web avisa de que ese commit no lo ha revisado UATU)."""
     if conv["approval"]:
         return False, "ya está aprobada"
-    pending = pending_draft_for_head(pr)
-    if pending:
-        if not discard_pending:
-            return False, "hay un borrador pendiente para este commit: publícalo, descártalo o apruébala sin publicarlo"
-        entry = {"sha": pending["head"]}
+    pending = pending_draft(pr)
+    if pending and discard_pending:
+        return True, None
+    if pending and pending["head"] == pr["headRefOid"]:
+        return False, "hay un borrador pendiente para este commit: publícalo, descártalo o apruébala sin publicarlo"
     if not entry:
         return False, "UATU no ha revisado esta PR"
     if entry["sha"] != pr["headRefOid"] and not has_replies(conv):
@@ -553,16 +589,16 @@ def approve_pr(repo: str, number: int, message: str = "", discard_pending: bool 
     """Manda una review APPROVE sobre el commit actual. Es la única review que no es COMMENT,
     y siempre la pide una persona desde la web o la CLI.
 
-    Con `discard_pending`, si hay un borrador pendiente para ese commit se aprueba sin publicar
-    sus comentarios: primero sale el APPROVE y después se descarta el borrador, que deja la PR
-    como revisada hasta ese commit."""
+    Con `discard_pending`, si hay un borrador pendiente se aprueba sin publicar sus comentarios:
+    primero sale el APPROVE y después se descarta el borrador, que deja la PR como revisada hasta
+    el commit del borrador."""
     pr = get_pr(repo, number)
     key = state_key(repo, number)
     conv = fetch_conversations(repo, [number]).get(number) or {"approval": None, "threads": []}
     ok, why = can_approve(pr, load_state().get(key), conv, discard_pending)
     if not ok:
         raise ValueError(why)
-    pending = pending_draft_for_head(pr) if discard_pending else None
+    pending = pending_draft(pr) if discard_pending else None
     payload = {"commit_id": pr["headRefOid"], "event": "APPROVE", "body": (message or "").strip()}
     sh(["gh", "api", "-X", "POST", f"repos/{ORG}/{repo}/pulls/{number}/reviews", "--input", "-"],
        input_text=json.dumps(payload))
@@ -572,7 +608,7 @@ def approve_pr(repo: str, number: int, message: str = "", discard_pending: bool 
         n = len([c for c in pending["comments"] if c.get("enabled", True) and (c.get("body") or "").strip()])
         skipped = f" sin publicar el borrador ({n} comentario{'' if n == 1 else 's'} descartado{'' if n == 1 else 's'})"
     entry = load_state().get(key)
-    unreviewed = " (commits sin revisar por UATU)" if entry and entry["sha"] != pr["headRefOid"] else ""
+    unreviewed = " (commits sin revisar por UATU)" if not entry or entry["sha"] != pr["headRefOid"] else ""
     log(f"{key}: aprobada en {pr['headRefOid'][:10]}{unreviewed}{skipped}{' con mensaje' if payload['body'] else ''} · {pr['url']}")
     return {"key": key, "sha": pr["headRefOid"], "at": now(), "discarded_draft": bool(pending)}
 
@@ -803,13 +839,14 @@ def render_prompt(pr: dict, head: str, diff_file: Path, delta_file: Path, mode: 
     return text
 
 
-def run_claude(repo_path: Path, prompt: str, pr: dict):
-    """Devuelve (salida estructurada, metadatos de la ejecución)."""
+def run_claude(repo_path: Path, prompt: str, pr: dict, schema=None, tag: str = ""):
+    """Devuelve (salida estructurada, metadatos de la ejecución). `schema` es el de la salida
+    (por defecto el de una review); `tag` distingue los artefactos en state/work/."""
     ccfg = CONFIG["claude"]
     cmd = [
         "claude", "-p", prompt,
         "--output-format", "json",
-        "--json-schema", json.dumps(FINDINGS_SCHEMA),
+        "--json-schema", json.dumps(schema or FINDINGS_SCHEMA),
         "--permission-mode", "dontAsk",
         "--allowedTools", "Read", "Grep", "Glob",
         "Bash(git diff:*)", "Bash(git log:*)", "Bash(git show:*)", "Bash(git blame:*)",
@@ -825,7 +862,7 @@ def run_claude(repo_path: Path, prompt: str, pr: dict):
         cmd += ["--model", ccfg["model"]]
     log(f"  claude revisando {pr['repo']}#{pr['number']} ...")
     res = subprocess.run(cmd, cwd=repo_path, text=True, capture_output=True)
-    raw_path = WORK_DIR / f"{pr['repo']}-{pr['number']}-claude.json"
+    raw_path = WORK_DIR / f"{pr['repo']}-{pr['number']}{tag}-claude.json"
     raw_path.write_text(res.stdout)
     if res.returncode != 0:
         raise RuntimeError(f"claude salió con {res.returncode}: {res.stderr.strip()[:2000]}")
@@ -1110,6 +1147,162 @@ def pending_rows(rows: list) -> list:
             continue
         out.append(r)
     return out
+
+
+# ----------------------------------------------------------------- mis PRs: revisión para un agente
+
+def self_path(repo: str, number: int) -> Path:
+    return SELF_DIR / f"{repo}-{number}.json"
+
+
+def load_self(repo: str, number: int):
+    p = self_path(repo, number)
+    return json.loads(p.read_text()) if p.exists() else None
+
+
+def save_self(review: dict) -> None:
+    SELF_DIR.mkdir(parents=True, exist_ok=True)
+    self_path(review["repo"], review["number"]).write_text(json.dumps(review, indent=2, ensure_ascii=False))
+
+
+def enabled_self_findings(review: dict) -> list:
+    return [f for f in review["findings"] if f.get("enabled", True)]
+
+
+def self_summary(review: dict, head: str) -> dict:
+    """Lo que la lista de mis PRs necesita saber de su última revisión."""
+    enabled = enabled_self_findings(review)
+    return {
+        "created_at": review["created_at"], "head": review["head"], "stale": review["head"] != head,
+        "findings": len(enabled), "total": len(review["findings"]), "general": len(review.get("general") or []),
+        "by_severity": {s: sum(1 for f in enabled if f["severity"] == s) for s in SEVERITY_ORDER},
+        "cost_usd": (review.get("claude") or {}).get("cost_usd"), "overview": review.get("overview", ""),
+    }
+
+
+def my_overview() -> list:
+    """Mis PRs en borrador en cada repo, con su revisión propia si la hay."""
+    rows = []
+    for repo in CONFIG["repos"]:
+        for pr in list_mine(repo):
+            review = load_self(repo, pr["number"])
+            rows.append({
+                "key": state_key(repo, pr["number"]), "repo": repo, "number": pr["number"], "title": pr["title"],
+                "url": pr["url"], "head": pr["headRefOid"], "head_ref": pr["headRefName"], "base_ref": pr["baseRefName"],
+                "updated_at": pr["updatedAt"], "additions": pr["additions"], "deletions": pr["deletions"],
+                "review": self_summary(review, pr["headRefOid"]) if review else None,
+            })
+    return rows
+
+
+def render_self_prompt(pr: dict, head: str, diff_file: Path) -> str:
+    body = (pr.get("body") or "").strip() or "(sin descripción)"
+    repl = {
+        "{{REPO}}": pr["repo"], "{{PR_NUMBER}}": str(pr["number"]), "{{PR_TITLE}}": pr["title"],
+        "{{AUTHOR}}": pr["author"]["login"], "{{HEAD_REF}}": pr["headRefName"],
+        "{{BASE_REF}}": pr["baseRefName"], "{{HEAD_SHA}}": head, "{{PR_BODY}}": body,
+        "{{DIFF_FILE}}": str(diff_file), "{{CODE_AGREEMENTS}}": render_agreements(pr["repo"]),
+        "{{CODE_AGREEMENTS_URL}}": (CONFIG.get("code_agreements") or {}).get("url", ""),
+        "{{REVIEWER_NAME}}": reviewer_name(),
+    }
+    text = SELF_PROMPT_FILE.read_text()
+    for k, v in repl.items():
+        text = text.replace(k, v)
+    return text
+
+
+def with_agreement(finding: dict) -> dict:
+    """Si el hallazgo cita un Code Agreement, la atribución y el enlace a Notion, para el texto."""
+    aid = (finding.get("agreement") or "").strip()
+    agreement = load_agreements().get(aid) if aid else None
+    if aid and not agreement:
+        log(f"  acuerdo desconocido '{aid}' en {finding['path']}:{finding['line']}")
+    if not agreement:
+        return {**finding, "agreement": aid or None, "agreement_url": None}
+    return {**finding, "agreement": aid, "agreement_url": agreement_url(agreement),
+            "rule": f"Code Agreements › {agreement['title']}"}
+
+
+def self_review(pr: dict) -> dict:
+    """Revisa una PR mía (completa, siempre) con claude y guarda el resultado en state/self/.
+    No toca GitHub ni el estado de las revisiones del equipo."""
+    repo, number, head = pr["repo"], pr["number"], pr["headRefOid"]
+    key = state_key(repo, number)
+    STATE_DIR.mkdir(exist_ok=True)
+    with open(STATE_DIR / f"{repo}.lock", "w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        repo_path = ensure_clone(repo)
+        merge_base = prepare_checkout(repo_path, pr)
+        full_diff = git_diff(repo_path, merge_base, head)
+        changed = count_changed_lines(full_diff)
+        if changed > CONFIG["max_changed_lines"]:
+            raise Skip(f"{changed} líneas cambiadas > tope {CONFIG['max_changed_lines']}")
+        WORK_DIR.mkdir(parents=True, exist_ok=True)
+        diff_file = WORK_DIR / f"{repo}-{number}-self-full.diff"
+        diff_file.write_text(full_diff)
+        log(f"{key}: revisión propia, {changed} líneas, '{pr['title']}'")
+        result, meta = run_claude(repo_path, render_self_prompt(pr, head, diff_file), pr, SELF_SCHEMA, "-self")
+        in_diff = commentable_lines(full_diff)
+        findings = []
+        for f in result.get("findings", []):
+            if f["path"] not in in_diff:
+                log(f"  fuera del diff (se mantiene): {f['path']}:{f['line']}")
+            start, line = int(f["start_line"]), int(f["line"])
+            if start > line:
+                start = line
+            findings.append({**with_agreement(f), "start_line": start, "line": line,
+                             "title": f["title"].strip(), "problem": f["problem"].strip(), "fix": f["fix"].strip(),
+                             "enabled": True, "context": code_context(repo_path, f["path"], start, line)})
+    findings.sort(key=lambda f: (SEVERITY_ORDER.get(f["severity"], 9), f["path"], f["line"]))
+    review = {
+        "repo": repo, "number": number, "title": pr["title"], "author": pr["author"]["login"],
+        "url": pr["url"], "head": head, "head_ref": pr["headRefName"], "base_ref": pr["baseRefName"],
+        "lines_changed": changed, "created_at": now(),
+        "overview": (result.get("overview") or "").strip(),
+        "general": [str(g).strip() for g in (result.get("general") or []) if str(g).strip()],
+        "findings": findings, "claude": meta,
+    }
+    save_self(review)
+    log(f"{key}: revisión propia lista con {len(findings)} puntos y {len(review['general'])} generales")
+    return review
+
+
+def agent_text(review: dict) -> str:
+    """El texto para el agente que va a arreglar la PR: contexto, cada punto activo como orden de
+    trabajo (dónde, qué pasa, qué hacer, norma) y lo general. Markdown plano, sin nada de UATU."""
+    findings = enabled_self_findings(review)
+    general = review.get("general") or []
+    url = (CONFIG.get("code_agreements") or {}).get("url", "")
+    out = [f"# Arreglos para {ORG}/{review['repo']}#{review['number']} · {review['title']}", "",
+           f"Rama `{review['head_ref']}` (sobre `{review['base_ref']}`), revisada en el commit "
+           f"`{review['head'][:10]}`. Trabaja sobre esa rama, en este mismo repositorio."]
+    if review.get("overview"):
+        out += ["", f"Qué hace la PR: {review['overview']}"]
+    out += ["", "Antes de tocar nada lee `AGENTS.md`, `CLAUDE.md` y las reglas de `.claude/rules` que casen con "
+            "los ficheros que vayas a cambiar" + (f", y ten a mano los Code Agreements del equipo: {url}" if url else "")
+            + ". Lee el código alrededor de cada punto antes de cambiarlo. Si al leerlo algo de lo que sigue no se "
+            "sostiene, dilo en lugar de forzarlo.", ""]
+    if findings:
+        out += [f"## Puntos que arreglar · {len(findings)}", ""]
+        for i, f in enumerate(findings, 1):
+            rng = f"{f['start_line']}-{f['line']}" if f["start_line"] < f["line"] else str(f["line"])
+            out += [f"### {i}. [{f['severity']}] {f['title']}", "", f"`{f['path']}:{rng}`", "",
+                    f"Qué pasa: {f['problem']}", "", f"Qué hacer: {f['fix']}"]
+            if f.get("rule") and f["rule"] != "bug":
+                out += ["", f"Norma: {f['rule']}" + (f" · {f['agreement_url']}" if f.get("agreement_url") else "")]
+            out += [""]
+    if general:
+        out += ["## Además", ""] + [f"- {g}" for g in general] + [""]
+    if not findings and not general:
+        out += ["No hay nada que arreglar: la revisión no encontró puntos pendientes.", ""]
+    out += ["## Al terminar", "",
+            "Cuenta qué has cambiado, punto por punto, y qué has dejado sin tocar y por qué. "
+            "No hagas commit: deja los cambios en el árbol de trabajo para revisarlos."]
+    return "\n".join(out).strip() + "\n"
+
+
+def with_text(review: dict) -> dict:
+    return {**review, "text": agent_text(review)}
 
 
 # ----------------------------------------------------------------- setup
@@ -1456,6 +1649,41 @@ def cmd_setup(args) -> None:
     print(f"guardado en {VOICE_FILE}")
 
 
+def cmd_mine(args) -> None:
+    """Mis PRs en borrador y el estado de su revisión propia."""
+    rows = my_overview()
+    if not rows:
+        print(f"no tienes PRs en borrador en {', '.join(CONFIG['repos'])}")
+        return
+    for r in rows:
+        rv = r["review"]
+        st = "sin revisar" if not rv else (f"{rv['findings']} puntos" + (f" + {rv['general']} generales" if rv["general"] else "")
+                                           + f" · {rv['created_at'][:16]}" + (" · COMMITS NUEVOS" if rv["stale"] else ""))
+        print(f"{r['key']:<16} {st:<48} {r['title'][:50]}")
+
+
+def cmd_self_review(args) -> None:
+    """Revisa una PR mía y escribe el texto para el agente (por consola o en un fichero)."""
+    if args.show:
+        review = load_self(args.repo, args.pr)
+        if not review:
+            sys.exit(f"no hay revisión propia de {args.repo}#{args.pr}: quita --show para generarla")
+    else:
+        pr = get_pr(args.repo, args.pr)
+        if pr["author"]["login"] != ME:
+            sys.exit(f"{args.repo}#{args.pr} es de {pr['author']['login']}, no tuya: para las del equipo usa `review`")
+        try:
+            review = self_review(pr)
+        except Skip as skip:
+            sys.exit(f"{args.repo}#{args.pr}: se salta, {skip}")
+    text = agent_text(review)
+    if args.out:
+        Path(args.out).write_text(text)
+        print(f"{len(enabled_self_findings(review))} puntos · texto en {args.out}")
+    else:
+        print(f"\n{text}")
+
+
 def cmd_status(args) -> None:
     labels = {"al-dia": "al día", "nuevos-commits": "nuevos commits", "pendiente": "pendiente"}
     for r in overview():
@@ -1496,12 +1724,20 @@ def main() -> None:
     p.add_argument("pr", type=int)
     p.add_argument("-m", "--message", help="cuerpo opcional de la review de aprobación")
     p.add_argument("--discard-draft", action="store_true",
-                   help="si hay un borrador pendiente para el commit actual, aprueba sin publicar sus comentarios y lo descarta")
+                   help="si hay un borrador pendiente, aprueba el commit actual sin publicar sus comentarios y lo descarta")
     p.set_defaults(fn=cmd_approve)
     p = sub.add_parser("replies", help="enseña las respuestas a mis comentarios en una PR")
     p.add_argument("repo")
     p.add_argument("pr", type=int)
     p.set_defaults(fn=cmd_replies)
+    p = sub.add_parser("mine", help="mis PRs en borrador y su revisión propia")
+    p.set_defaults(fn=cmd_mine)
+    p = sub.add_parser("self-review", help="revisa una PR mía en borrador y escribe el texto para que un agente la arregle")
+    p.add_argument("repo")
+    p.add_argument("pr", type=int)
+    p.add_argument("--show", action="store_true", help="enseña la última revisión sin volver a revisar")
+    p.add_argument("-o", "--out", help="escribe el texto en este fichero en vez de por consola")
+    p.set_defaults(fn=cmd_self_review)
     p = sub.add_parser("status", help="muestra el estado de cada PR candidata (APROBADA* = commits después del approve)")
     p.set_defaults(fn=cmd_status)
     p = sub.add_parser("setup", help="comprueba el entorno y el perfil personal (profile/)")

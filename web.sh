@@ -27,7 +27,9 @@ running_pid() {
   # pid del servidor si sigue vivo; vacío si no
   local pid
   pid=$(cat "$PIDFILE" 2>/dev/null || true)
-  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then echo "$pid"; return; fi
+  # Tras un reinicio el pid del fichero puede pertenecer a otro proceso: comprobar que es server.py
+  if [[ -n "$pid" ]] && ps -p "$pid" -o command= 2>/dev/null | grep -q 'server.py'; then echo "$pid"; return; fi
+  [[ -n "$pid" ]] && rm -f "$PIDFILE"
   pgrep -f 'python3 server.py' | head -1 || true
 }
 

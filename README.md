@@ -72,7 +72,8 @@ en primer plano que abra el navegador: `python3 server.py`.
    da la PR por revisada hasta ese commit, igual que si no hubiera habido hallazgos.
    **Aprobar sin publicar** hace lo mismo que descartar y, además, manda una review `APPROVE`
    sobre ese commit (con un mensaje opcional): para cuando has leído el borrador y la PR te parece
-   bien tal cual, sin mandar los comentarios. Sólo aparece si el borrador es del commit actual.
+   bien tal cual, sin mandar los comentarios. Si la PR tiene commits posteriores al borrador, el
+   APPROVE sale igualmente sobre el commit actual y el diálogo avisa de que UATU no lo ha revisado.
 
 Una PR con borrador pendiente para su commit actual no se vuelve a revisar (el servidor
 lo rechaza): primero publícalo o descártalo. «Revisar de nuevo» (PR completa) sí lo
@@ -88,6 +89,28 @@ al que se anclan.
 
 Los borradores publicados o descartados se pueden seguir consultando en sólo lectura. La URL
 `#repo/número` abre un borrador directamente; `#repo/número/respuestas`, su conversación.
+
+### Mis PRs: revisar lo mío antes de pedir revisión
+
+El botón **Mis PRs** de la cabecera (URL `#mias`) lista tus PRs abiertas **en borrador** (autor tú,
+`isDraft`) en los repos observados. **Revisar** las pasa por `claude` con las mismas normas que las
+del equipo (`AGENTS.md`, reglas, skills, Code Agreements) pero con otro prompt
+(`prompts/self-review.md`): no hay voz ni elogios, y cada hallazgo es una orden de trabajo para un
+agente de código (`title`, `problem`, `fix` en imperativo, con código cuando hace falta). El resultado
+se guarda en `state/self/<repo>-<pr>.json` y **nunca llega a GitHub**.
+
+**Ver resultado** (`#mias/repo/número`) enseña qué hace la PR, cada punto con su código y la norma de
+la que sale, lo general que no se ancla a una línea (tests que faltan, descripción vacía) y, al pie,
+el **texto para el agente**: markdown con el contexto de la rama, los puntos marcados ordenados por
+severidad y una instrucción final de contar qué cambió sin hacer commit. Se desmarcan los puntos que
+no quieras (el texto se regenera), se retoca a mano si hace falta y **Copiar el texto** lo deja en el
+portapapeles para pegárselo a Claude Code con la rama abierta. Siempre se revisa la PR entera (no hay
+delta): tras arreglar y subir commits, «Revisar de nuevo» repasa lo que quede. La lista avisa con
+«commits nuevos» cuando la PR avanza desde la revisión. Aplica el mismo tope de líneas que al equipo
+(`max_changed_lines`); una PR mayor se omite con el aviso correspondiente.
+
+Las PRs tuyas que ya no son borrador no salen aquí (ni en la lista del equipo: nadie se revisa a sí
+mismo en público). La CLI, `self-review`, acepta cualquier PR tuya, draft o no.
 
 ### Después de publicar: respuestas y aprobación
 
@@ -130,7 +153,7 @@ publicar reviews con tu cuenta, así que sólo en redes de confianza. Las llamad
 | Ejecución | a demanda desde la web local (`server.py`); no hay cron ni launchd |
 | Publicación | siempre manual, tras ver el borrador |
 | Identidad | quien ejecuta: su sesión de `gh`; usuario, nombre y voz en `profile/` |
-| PRs elegibles | abiertas, no draft, autor ≠ yo, autor ∉ bots |
+| PRs elegibles | abiertas, no draft, autor ≠ yo, autor ∉ bots; en «Mis PRs», las mías en draft |
 | Re-revisión | sólo el delta de commits desde la última revisión; si hubo force-push, la PR entera |
 | Tipo de review | los borradores salen siempre como `COMMENT`; `APPROVE` sólo a mano desde los botones «Aprobar» y «Aprobar sin publicar», y nunca request-changes |
 | Sin hallazgos | se descarta el borrador y se anota en el estado local |
@@ -180,6 +203,9 @@ python3 uatu.py run --repo tortilla --max 2   # borradores para las pendientes, 
 python3 uatu.py replies gofre 1640        # respuestas a mis comentarios en esa PR
 python3 uatu.py approve gofre 1640 -m "LGTM"  # APPROVE, con las mismas condiciones que el botón
 python3 uatu.py approve gofre 1640 --discard-draft  # aprueba sin publicar el borrador pendiente (lo descarta)
+python3 uatu.py mine                      # mis PRs en borrador y el estado de su revisión propia
+python3 uatu.py self-review tortilla 5472 -o /tmp/arreglos.md  # revisa mi PR y escribe el texto para el agente
+python3 uatu.py self-review tortilla 5472 --show  # enseña la última revisión propia sin volver a revisar
 python3 uatu.py setup                     # comprobaciones y estado del perfil
 python3 uatu.py setup --import-voice      # destila la voz del historial y pregunta antes de guardar
 ```
@@ -191,7 +217,8 @@ Sin perfil completo, los demás comandos paran y remiten a `setup`.
 La CLI y el servidor pueden convivir: comparten el lock por repo y el estado.
 
 Artefactos de cada revisión en `state/work/`: `<repo>-<pr>-full.diff`, `-delta.diff`,
-`-claude.json` (salida cruda) y `-payload.json` (lo último enviado a GitHub).
+`-claude.json` (salida cruda) y `-payload.json` (lo último enviado a GitHub); los de una revisión
+propia llevan `-self` (`-self-full.diff`, `-self-claude.json`).
 Log en `logs/uatu.log` (las últimas líneas también en la web, botón «Log»).
 
 ## Ajustes

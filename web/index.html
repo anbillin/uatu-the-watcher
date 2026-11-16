@@ -271,6 +271,17 @@
   .setup .preview { margin-top: 6px; padding: 10px 12px; border: 1px dashed var(--line); border-radius: 8px; font-size: 13px; line-height: 1.5; white-space: pre-wrap; background: var(--bg); }
   .setup .preview pre { margin: 6px 0; padding: 8px 10px; border-radius: 8px; background: var(--card); border: 1px solid var(--line-2); font: 12px/1.5 var(--mono); overflow-x: auto; white-space: pre; }
   .setup .preview code { font: 12px var(--mono); background: color-mix(in srgb, var(--muted) 12%, transparent); padding: 1px 4px; border-radius: 4px; }
+  /* ---------- mis PRs: la revisión propia y el texto para el agente ---------- */
+  .card .body .ttl { font-weight: 600; margin: 0 0 6px; }
+  .card .body .prob { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .card .body .fix { padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 0 8px 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .card .body .fix pre, .card .body .prob pre { margin: 6px 0; padding: 8px 10px; border-radius: 8px; background: var(--bg); border: 1px solid var(--line-2); font: 12px/1.5 var(--mono); overflow-x: auto; white-space: pre; }
+  .card .body .fix code, .card .body .prob code { font: 12px var(--mono); background: color-mix(in srgb, var(--muted) 12%, transparent); padding: 1px 4px; border-radius: 4px; }
+  .card .body ul.general { margin: 0; padding-left: 20px; }
+  .card .body ul.general li { margin: 3px 0; }
+  .agent { margin-top: 14px; }
+  .agent .lead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+  .agent textarea { font-size: 12.5px; }
   pre.log { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; font: 12px/1.5 var(--mono);
             max-height: 320px; overflow: auto; white-space: pre-wrap; color: var(--muted); }
   .oath { margin: 40px auto 0; text-align: center; color: var(--muted); font: italic 12px/1.5 var(--display); letter-spacing: .04em; opacity: .8; }
@@ -362,6 +373,7 @@
   <span class="sub" id="updated"></span>
   <button id="btn-refresh" onclick="refresh(true)">Actualizar</button>
   <button id="btn-review-all" onclick="reviewAll()">Revisar pendientes</button>
+  <button id="btn-mine" onclick="openMine()" title="Tus PRs en borrador: UATU las revisa y te prepara el texto para que un agente las arregle">Mis PRs</button>
   <button onclick="toggleLog()">Log</button>
   <button onclick="openSetup()" title="Quién eres y cómo suenas">Setup</button>
 </header>
@@ -369,7 +381,9 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const S = { prs: [], jobs: {}, config: {}, generatedAt: null, error: null, picker: null,
+const S = { prs: [], mine: [], jobs: {}, config: {}, generatedAt: null, error: null, picker: null,
+            // mis PRs en borrador: la revisión propia abierta y el texto para el agente si se ha editado a mano
+            self: null, selfText: null,
             view: 'list', draft: null, conv: null, showLog: false, showApproved: false, logLines: [], timer: null,
             ready: true, setup: null, setupTimer: null, setupConsumed: null,
             // código completo del borrador abierto: el diff, si se enseña, qué ficheros están desplegados
@@ -409,7 +423,7 @@ async function refresh(force) {
   const b = document.getElementById('btn-refresh'); b.disabled = true;
   try {
     const d = await api('GET', '/api/prs' + (force ? '?refresh=1' : ''));
-    Object.assign(S, { prs: d.prs, jobs: d.jobs, config: d.config, generatedAt: d.generated_at, error: null, ready: d.ready !== false });
+    Object.assign(S, { prs: d.prs, mine: d.mine || [], jobs: d.jobs, config: d.config, generatedAt: d.generated_at, error: null, ready: d.ready !== false });
   } catch (e) { S.error = e.message; }
   finally { b.disabled = false; }
   // Sin perfil completo no hay lista: todo pasa por Setup.
@@ -422,8 +436,11 @@ async function pollJobs() {
   try {
     const d = await api('GET', '/api/jobs');
     const before = S.jobs; S.jobs = d.jobs;
-    const finishedOne = Object.keys(d.jobs).some(k => terminal(d.jobs[k]) && !terminal(before[k]));
-    if (finishedOne) { await refresh(false); return; }
+    const finished = Object.keys(d.jobs).filter(k => terminal(d.jobs[k]) && !terminal(before[k]));
+    if (finished.length) {
+      if (S.view === 'self' && S.self && finished.includes(`${S.self.repo}#${S.self.number}`)) await loadSelf(S.self.repo, S.self.number);
+      await refresh(false); return;
+    }
     if (S.showLog) await loadLog();
     render();
   } catch (e) { /* siguiente intento */ }
@@ -621,7 +638,7 @@ function reactionsBar(m) {
     : `<button class="more" onclick="togglePicker('${m.node_id}')" title="reaccionar">+</button>`;
   return `<div class="reacts">${chips.join('')}${picker}</div>`;
 }
-function backToList() { S.view = 'list'; S.draft = null; S.conv = null; history.replaceState(null, '', location.pathname); render(true); }
+function backToList() { S.view = 'list'; S.draft = null; S.conv = null; S.self = null; S.selfText = null; history.replaceState(null, '', location.pathname); render(true); }
 
 function collectEdits() {
   const comments = [...document.querySelectorAll('.card[data-i]')].map(card => ({
@@ -666,7 +683,10 @@ async function approveFromDraft() {
   const d = S.draft;
   const n = [...document.querySelectorAll('.card[data-i]')].filter(c => c.querySelector('input').checked && c.querySelector('textarea').value.trim()).length;
   const what = n ? `sin publicar ${n === 1 ? 'el comentario' : `los ${n} comentarios`} del borrador` : 'sin publicar nada';
-  const message = prompt(`Aprobar ${d.repo}#${d.number} como ${S.config.me} ${what}?\n\nEl borrador se descarta y sale una review APPROVE sobre el commit ${d.head.slice(0, 10)}.\n\nMensaje opcional (vacío para aprobar sin texto):`, '');
+  const where = d.stale
+    ? `sobre el commit actual de la PR, que UATU NO ha revisado (el borrador llegó hasta ${d.head.slice(0, 10)}).`
+    : `sobre el commit ${d.head.slice(0, 10)}.`;
+  const message = prompt(`Aprobar ${d.repo}#${d.number} como ${S.config.me} ${what}?\n\nEl borrador se descarta y sale una review APPROVE ${where}\n\nMensaje opcional (vacío para aprobar sin texto):`, '');
   if (message === null) return;
   try {
     await api('POST', `/api/prs/${d.repo}/${d.number}/approve`, { message: message.trim(), discard_draft: true });
@@ -691,6 +711,137 @@ function updateCount() {
   const pc = document.getElementById('praise-card'); if (pc) pc.classList.toggle('off', !(po && po.checked));
 }
 async function toggleLog() { S.showLog = !S.showLog; if (S.showLog) await loadLog(); render(true); }
+
+// ------------------------------------------------------------ mis PRs: revisión propia para un agente
+function openMine() { S.view = 'mine'; S.self = null; S.selfText = null; history.replaceState(null, '', '#mias'); render(true); window.scrollTo(0, 0); }
+async function loadSelf(repo, number) {
+  S.self = await api('GET', `/api/self/${repo}/${number}`); S.selfText = null;
+}
+async function openSelf(repo, number) {
+  try {
+    await loadSelf(repo, number);
+    S.view = 'self'; history.replaceState(null, '', `#mias/${repo}/${number}`); render(true); window.scrollTo(0, 0);
+  } catch (e) { toast(e.message, true); }
+}
+async function selfReview(repo, number) {
+  try {
+    await api('POST', '/api/self/review', { repo, number });
+    toast(`${repo}#${number} en cola`);
+    await pollJobs();
+  } catch (e) { toast(e.message, true); }
+}
+// Marcar o desmarcar un punto regenera el texto en el servidor; lo editado a mano en el texto se pierde.
+async function toggleSelfFinding(i, on) {
+  const r = S.self;
+  if (S.selfText !== null && !confirm('Has editado el texto a mano: al cambiar los puntos se vuelve a generar y se pierde lo editado. ¿Seguir?')) { render(true); return; }
+  const findings = r.findings.map((f, j) => ({ enabled: j === i ? on : f.enabled }));
+  try {
+    const y = window.scrollY;
+    S.self = await api('PUT', `/api/self/${r.repo}/${r.number}`, { findings }); S.selfText = null;
+    render(true); window.scrollTo(0, y);
+  } catch (e) { toast(e.message, true); }
+}
+async function copyAgentText() {
+  const t = document.getElementById('agent-text'); if (!t) return;
+  try { await navigator.clipboard.writeText(t.value); toast('Texto copiado: pégaselo al agente'); }
+  catch (e) {
+    // sin contexto seguro (http desde otro equipo) no hay clipboard API
+    t.focus(); t.select();
+    const ok = document.execCommand && document.execCommand('copy');
+    toast(ok ? 'Texto copiado: pégaselo al agente' : 'No se pudo copiar: está seleccionado, copia con ⌘C', !ok);
+  }
+}
+function selfStatusCell(pr) {
+  const job = S.jobs[pr.key], rv = pr.review, out = [];
+  if (job && job.status === 'queued') out.push('<span class="pill accent">en cola</span>');
+  else if (job && job.status === 'running') out.push(`<span class="pill accent busy">revisando desde ${job.started_at.slice(11, 16)}</span>`);
+  if (rv) {
+    const n = rv.findings, g = rv.general;
+    const what = n || g ? `${n} punto${n === 1 ? '' : 's'}${g ? ` + ${g} general${g === 1 ? '' : 'es'}` : ''}` : 'nada que arreglar';
+    out.push(`<span class="pill ${n || g ? 'warn' : 'ok'}" title="revisada ${esc(rv.created_at)} en ${esc(rv.head.slice(0, 10))}">${what}${rv.stale ? ' · commits nuevos' : ''}</span>`);
+  } else if (!job || job.status !== 'running') {
+    out.push('<span class="pill">sin revisar</span>');
+  }
+  let msg = '';
+  if (job && (job.status === 'error' || job.status === 'skipped')) msg = `<div class="msg ${job.status === 'error' ? 'bad' : ''}">${job.status === 'error' ? 'Error: ' : 'Omitida: '}${esc(job.message)}</div>`;
+  return out.join(' ') + msg;
+}
+function selfActionsCell(pr) {
+  const job = S.jobs[pr.key], busy = job && (job.status === 'queued' || job.status === 'running');
+  const r = `'${pr.repo}', ${pr.number}`, out = [];
+  if (pr.review) out.push(`<button class="primary" onclick="openSelf(${r})">Ver resultado</button>`);
+  if (busy) out.push('<button disabled>Revisando…</button>');
+  else out.push(`<button class="${pr.review ? '' : 'primary'}" onclick="selfReview(${r})" title="Revisa la PR entera con Claude y prepara el texto para el agente">${pr.review ? 'Revisar de nuevo' : 'Revisar'}</button>`);
+  return btnset(out);
+}
+function renderMine() {
+  const rows = S.mine || [], repos = (S.config.repos || []).join(', ');
+  let html = `<button class="link" onclick="backToList()">← Volver a la lista</button>
+    <h2>Mis PRs en borrador · ${rows.length}</h2>
+    <p style="margin:0 0 10px;color:var(--muted);font-size:13px">Tus PRs abiertas en modo draft en ${esc(repos)}. «Revisar» las pasa por Claude con las mismas normas que las del equipo y prepara un texto con lo que hay que arreglar, listo para pegárselo a un agente. Nada de esto llega a GitHub.</p>`;
+  if (!rows.length) return html + `<div class="empty quote"><em>«Ni siquiera el Vigilante puede observar lo que aún no existe.»</em>No tienes PRs en borrador en ${esc(repos)}. Las tuyas que ya están listas para revisión las mira el equipo, no UATU.</div>`;
+  html += `<table><thead><tr><th style="width:70px">PR</th><th>Título</th><th style="width:230px">Estado</th><th style="width:150px"></th></tr></thead><tbody>${rows.map(pr => `
+      <tr>
+        <td class="num"><a href="${esc(pr.url)}" target="_blank" rel="noopener">${esc(pr.repo)}#${pr.number}</a></td>
+        <td><div class="title">${esc(pr.title)}</div>
+            <div class="meta"><code>${esc(pr.head_ref)}</code> → ${esc(pr.base_ref)} ·
+                 <span style="color:var(--ok)">+${pr.additions}</span> <span style="color:var(--bad)">−${pr.deletions}</span> · ${fmtAgo(pr.updated_at)}</div>
+            ${pr.review && pr.review.overview ? `<div class="gist" title="Qué hace la PR, según la última revisión">${esc(pr.review.overview)}</div>` : ''}</td>
+        <td>${selfStatusCell(pr)}</td>
+        <td class="actions">${selfActionsCell(pr)}</td>
+      </tr>`).join('')}</tbody></table>`;
+  return html;
+}
+function renderSelf() {
+  const r = S.self, row = (S.mine || []).find(p => p.repo === r.repo && p.number === r.number);
+  const stale = row && row.head !== r.head, c = r.claude || {}, job = S.jobs[`${r.repo}#${r.number}`];
+  const busy = job && (job.status === 'queued' || job.status === 'running');
+  const on = r.findings.filter(f => f.enabled).length;
+  let html = `
+    <button class="link" onclick="openMine()">← Volver a mis PRs</button>
+    <div class="draft-head" style="margin-top:10px">
+      <h2><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.repo)}#${r.number}</a> · ${esc(r.title)}</h2>
+      <div class="meta"><span>revisión propia</span><span><code>${esc(r.head_ref)}</code> → ${esc(r.base_ref)}</span>
+        ${r.lines_changed != null ? `<span>${r.lines_changed} líneas</span>` : ''}<span>commit <code>${r.head.slice(0, 10)}</code></span>
+        <span>generado ${esc(r.created_at)}</span>${c.cost_usd != null ? `<span>${c.turns} turnos · ${c.cost_usd.toFixed(2)} USD</span>` : ''}</div>
+      ${busy ? '<div class="banner ok"><span class="pill accent busy">revisando de nuevo</span> cuando acabe, esta página se actualiza sola.</div>' : ''}
+      ${stale && !busy ? `<div class="banner warn">La PR tiene commits nuevos desde esta revisión (<code>${row.head.slice(0, 10)}</code>). Lo que no hayas tocado sigue valiendo; «Revisar de nuevo» la repasa entera.</div>` : ''}
+      ${r.overview ? `<div class="explain"><label class="rule">Qué hace esta PR · interno</label><p class="what">${md(r.overview)}</p></div>` : ''}
+    </div>`;
+  if (!r.findings.length && !(r.general || []).length) html += `<div class="empty" style="margin-top:14px">Claude no encontró nada que arreglar. Si quieres una segunda pasada tras cambiar algo, «Revisar de nuevo».</div>`;
+  html += r.findings.map((f, i) => {
+    const rng = f.start_line < f.line ? `${f.start_line}-${f.line}` : f.line;
+    const code = (f.context || []).map(x => `<span class="ln ${x.hit ? 'hit' : ''}"><span class="n">${x.n}</span>${esc(x.text)}</span>`).join('') || '<span class="ln">(sin contexto)</span>';
+    return `
+    <div class="card ${f.enabled ? '' : 'off'}" data-f="${i}">
+      <div class="bar">
+        <span class="path"><a href="${esc(r.url)}/files" target="_blank" rel="noopener">${esc(f.path)}</a>:${rng}</span>
+        <span class="rule">${esc(f.severity)} · ${f.agreement_url ? `<a href="${esc(f.agreement_url)}" target="_blank" rel="noopener">${esc(f.rule)}</a>` : esc(f.rule)}</span>
+        <label><input type="checkbox" ${f.enabled ? 'checked' : ''} onchange="toggleSelfFinding(${i}, this.checked)"> incluir</label>
+      </div>
+      <pre class="code">${code}</pre>
+      <div class="body"><p class="ttl">${md(f.title)}</p><div class="prob">${md(f.problem)}</div><div class="fix">${md(f.fix)}</div></div>
+    </div>`;
+  }).join('');
+  if ((r.general || []).length) html += `
+    <div class="card">
+      <div class="bar"><span class="path" style="font-family:inherit">Además · lo que no se ancla a una línea</span></div>
+      <div class="body"><ul class="general">${r.general.map(g => `<li>${md(g)}</li>`).join('')}</ul></div>
+    </div>`;
+  html += `
+    <div class="agent">
+      <h2>Texto para el agente</h2>
+      <p class="lead"><span>${on} de ${r.findings.length} punto${r.findings.length === 1 ? '' : 's'}${(r.general || []).length ? ` y ${r.general.length} general${r.general.length === 1 ? '' : 'es'}` : ''}. Pégaselo a Claude Code (o al agente que uses) con la rama <code>${esc(r.head_ref)}</code> abierta. Desmarca un punto y el texto se regenera; también puedes retocarlo aquí antes de copiarlo.</span></p>
+      <textarea id="agent-text" oninput="S.selfText = this.value; autosize(this)" spellcheck="false">${esc(S.selfText !== null ? S.selfText : r.text)}</textarea>
+    </div>
+    <div class="footer">
+      <button onclick="selfReview('${r.repo}', ${r.number})" ${busy ? 'disabled' : ''} title="Repasa la PR entera en su commit actual">Revisar de nuevo</button>
+      <span class="hint">Nada de esto llega a GitHub: la revisión es para ti y para el agente que arregle la PR.</span>
+      <span class="spacer"></span>
+      <button class="primary" onclick="copyAgentText()">Copiar el texto</button>
+    </div>`;
+  return html;
+}
 
 // ------------------------------------------------------------ setup
 const $ = id => document.getElementById(id);
@@ -875,10 +1026,13 @@ function render(force) {
     return;
   }
   const y = window.scrollY;
-  let html = S.view === 'draft' ? renderDraft() : S.view === 'conv' ? renderConversation() : S.view === 'setup' ? renderSetup() : renderList();
+  let html = S.view === 'draft' ? renderDraft() : S.view === 'conv' ? renderConversation() : S.view === 'setup' ? renderSetup()
+           : S.view === 'mine' ? renderMine() : S.view === 'self' ? renderSelf() : renderList();
+  const bm = document.getElementById('btn-mine'); if (bm) bm.textContent = `Mis PRs${S.mine.length ? ` · ${S.mine.length}` : ''}`;
   if (S.showLog) html += `<h2>Log</h2><pre class="log">${esc(S.logLines.join('\n')) || '(vacío)'}</pre>`;
   main.innerHTML = html;
   if (S.view === 'draft') { updateCount(); main.querySelectorAll('textarea').forEach(autosize); }
+  if (S.view === 'self') main.querySelectorAll('textarea').forEach(autosize);
   if (S.showLog) { const l = main.querySelector('pre.log'); if (l) l.scrollTop = l.scrollHeight; }
   if (!force) window.scrollTo(0, y);
 }
@@ -1079,8 +1233,8 @@ function renderDraft() {
   if (!ro) html += `
     <div class="footer">
       <button class="danger" onclick="discard()">Descartar borrador</button>
-      ${stale ? '' : `<button onclick="approveFromDraft()" title="Descarta el borrador sin publicar sus comentarios y manda una review APPROVE sobre este commit">Aprobar sin publicar</button>`}
-      <span class="hint">Uatu sólo observa: nada llega a GitHub hasta que tú decides intervenir. Descartar da la PR por revisada hasta este commit${stale ? '' : '; aprobar sin publicar, además, manda el APPROVE'}.</span>
+      <button onclick="approveFromDraft()" title="Descarta el borrador sin publicar sus comentarios y manda una review APPROVE sobre el commit actual de la PR${stale ? ', que UATU no ha revisado' : ''}">Aprobar sin publicar</button>
+      <span class="hint">Uatu sólo observa: nada llega a GitHub hasta que tú decides intervenir. Descartar da la PR por revisada hasta este commit; aprobar sin publicar, además, manda el APPROVE.</span>
       <span class="spacer"></span>
       ${manual ? `<button onclick="askUatu()" title="Revisa la PR entera con Claude; tus comentarios se conservan en el nuevo borrador">Pedir revisión a UATU</button>` : ''}
       <button onclick="saveDraft()">Guardar cambios</button>
@@ -1135,6 +1289,9 @@ function renderConversation() {
 refresh(true).then(() => {
   if (!S.ready) return;  // refresh ya ha abierto Setup
   if (location.hash === '#setup') return openSetup();
+  if (location.hash === '#mias') return openMine();
+  const ms = location.hash.match(/^#mias\/([A-Za-z0-9._-]+)\/(\d+)$/);
+  if (ms) return openSelf(ms[1], parseInt(ms[2], 10));
   const m = location.hash.match(/^#([A-Za-z0-9._-]+)\/(\d+)(\/respuestas)?$/);
   if (m && m[3]) openConversation(m[1], parseInt(m[2], 10));
   else if (m) openDraft(m[1], parseInt(m[2], 10));

@@ -27,7 +27,7 @@ OVERVIEW_TTL = 60  # segundos de caché de `gh pr list`
 JOBS = {}            # key -> job
 JOBS_LOCK = threading.Lock()
 QUEUE = queue.Queue()
-CACHE = {"rows": None, "at": 0.0, "error": None}
+CACHE = {"rows": None, "mine": None, "at": 0.0, "error": None}
 CACHE_LOCK = threading.Lock()
 # Setup: comprobaciones cacheadas y la tarea larga en curso (importar o probar la voz), que va en
 # su propio hilo para no esperar detrás de una revisión de 4 minutos.
@@ -72,12 +72,33 @@ def enqueue(repo: str, number: int, full: bool) -> dict:
     return job
 
 
+def enqueue_self(repo: str, number: int) -> dict:
+    """Revisión de una PR mía: mismo hilo y misma cola que las del equipo (comparten el clon)."""
+    key = uatu.state_key(repo, number)
+    with JOBS_LOCK:
+        job = JOBS.get(key)
+        if job and job["status"] in ("queued", "running"):
+            return job
+        job = {"key": key, "repo": repo, "number": number, "kind": "self", "full": True, "status": "queued",
+               "queued_at": uatu.now(), "started_at": None, "finished_at": None, "message": None}
+        JOBS[key] = job
+    QUEUE.put(job)
+    return job
+
+
 def worker() -> None:
     while True:
         job = QUEUE.get()
         job["status"], job["started_at"] = "running", uatu.now()
         try:
             pr = uatu.get_pr(job["repo"], job["number"])
+            if job.get("kind") == "self":
+                if pr["author"]["login"] != uatu.ME:
+                    raise uatu.Skip(f"la PR es de {pr['author']['login']}, no tuya")
+                review = uatu.self_review(pr)
+                n = len(review["findings"])
+                job["status"], job["message"] = "done", f"{n} punto{'' if n == 1 else 's'} que arreglar"
+                continue
             if not job["full"] and fresh_pending_draft(job["repo"], job["number"], pr["headRefOid"]):
                 raise uatu.Skip("ya hay un borrador pendiente para este commit; ábrelo o descártalo")
             draft = uatu.make_draft(pr, force_full=job["full"])
@@ -155,13 +176,18 @@ def invalidate() -> None:
 
 
 def overview(force: bool = False) -> list:
+    return load_lists(force)[0]
+
+
+def load_lists(force: bool = False):
+    """(PRs del equipo, mis PRs en borrador), de la caché si sigue fresca."""
     with CACHE_LOCK:
         fresh = CACHE["rows"] is not None and time.time() - CACHE["at"] < OVERVIEW_TTL
         if fresh and not force:
-            return CACHE["rows"]
-        rows = uatu.overview()
-        CACHE.update(rows=rows, at=time.time())
-        return rows
+            return CACHE["rows"], CACHE["mine"]
+        rows, mine = uatu.overview(), uatu.my_overview()
+        CACHE.update(rows=rows, mine=mine, at=time.time())
+        return rows, mine
 
 
 # ----------------------------------------------------------------- diff de la PR
@@ -190,6 +216,7 @@ def pr_diff(repo: str, number: int, base_ref: str, head: str) -> str:
 DRAFT_RE = re.compile(r"^/api/drafts/([A-Za-z0-9._-]+)/(\d+)(?:/(publish|discard|create|comments)(?:/(\d+))?)?$")
 PR_RE = re.compile(r"^/api/prs/([A-Za-z0-9._-]+)/(\d+)/(conversation|approve|react|diff)$")
 SETUP_RE = re.compile(r"^/api/setup(?:/(checks|voice/import|voice/preview))?$")
+SELF_RE = re.compile(r"^/api/self/([A-Za-z0-9._-]+)/(\d+)$")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -252,6 +279,9 @@ class Handler(BaseHTTPRequestHandler):
         m = DRAFT_RE.match(path)
         if m and not m.group(3):
             return self.handle_api(lambda: self.get_draft(m.group(1), int(m.group(2))))
+        m = SELF_RE.match(path)
+        if m:
+            return self.handle_api(lambda: self.get_self(m.group(1), int(m.group(2))))
         m = PR_RE.match(path)
         if m and m.group(3) == "conversation":
             return self.handle_api(lambda: self.get_conversation(m.group(1), int(m.group(2))))
@@ -266,6 +296,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_api(self.post_review)
         if path == "/api/review-all":
             return self.handle_api(self.post_review_all)
+        if path == "/api/self/review":
+            return self.handle_api(self.post_self_review)
         m = SETUP_RE.match(path)
         if m and m.group(1) == "checks":
             return self.handle_api(self.post_setup_checks)
@@ -300,6 +332,9 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.partition("?")[0]
         if path == "/api/setup":
             return self.handle_api(self.put_setup)
+        m = SELF_RE.match(path)
+        if m:
+            return self.handle_api(lambda: self.put_self(m.group(1), int(m.group(2))))
         m = DRAFT_RE.match(path)
         if m and not m.group(3):
             return self.handle_api(lambda: self.put_draft(m.group(1), int(m.group(2))))
@@ -311,8 +346,9 @@ class Handler(BaseHTTPRequestHandler):
         config = {"repos": uatu.CONFIG.get("repos") or [], "me": uatu.ME, "org": uatu.ORG,
                   "name": uatu.CONFIG.get("name"), "max_prs_per_run": uatu.CONFIG["max_prs_per_run"]}
         if not uatu.is_ready():
-            return {"ready": False, "prs": [], "jobs": {}, "config": config, "generated_at": uatu.now()}
-        return {"ready": True, "prs": overview(force), "jobs": jobs_snapshot(), "config": config,
+            return {"ready": False, "prs": [], "mine": [], "jobs": {}, "config": config, "generated_at": uatu.now()}
+        rows, mine = load_lists(force)
+        return {"ready": True, "prs": rows, "mine": mine, "jobs": jobs_snapshot(), "config": config,
                 "generated_at": uatu.now()}
 
     def put_setup(self):
@@ -377,6 +413,35 @@ class Handler(BaseHTTPRequestHandler):
                 pass
         return {"jobs": jobs, "pending": len(rows)}
 
+    # --- mis PRs: revisión propia para un agente
+    def post_self_review(self):
+        body = self.read_body()
+        repo, number = body.get("repo"), body.get("number")
+        if repo not in uatu.CONFIG["repos"] or not isinstance(number, int):
+            raise ApiError(400, "repo o número de PR inválidos")
+        return {"job": enqueue_self(repo, number)}
+
+    def get_self(self, repo, number):
+        """La última revisión propia de la PR, con el texto para el agente ya montado."""
+        review = uatu.load_self(repo, number)
+        if not review:
+            raise ApiError(404, "no hay revisión propia de esa PR")
+        return uatu.with_text(review)
+
+    def put_self(self, repo, number):
+        """Marca qué puntos entran en el texto. Se identifican por posición."""
+        review = uatu.load_self(repo, number)
+        if not review:
+            raise ApiError(404, "no hay revisión propia de esa PR")
+        edits = self.read_body().get("findings") or []
+        if len(edits) != len(review["findings"]):
+            raise ApiError(409, "la revisión cambió; recarga la página")
+        for f, e in zip(review["findings"], edits):
+            f["enabled"] = bool(e.get("enabled", True))
+        uatu.save_self(review)
+        invalidate()
+        return uatu.with_text(review)
+
     def put_draft(self, repo, number):
         """Guarda las ediciones: resumen, cuerpo y activación de cada comentario.
         Los comentarios se identifican por posición; ruta y líneas no se tocan."""
@@ -420,7 +485,7 @@ class Handler(BaseHTTPRequestHandler):
     def post_approve(self, repo, number):
         """Review APPROVE sobre el commit actual. Sólo si UATU ya revisó ese commit o hay
         respuestas a mis comentarios (uatu.can_approve decide). Con `discard_draft`, un borrador
-        pendiente para ese commit no bloquea: se aprueba sin publicarlo y se descarta."""
+        pendiente no bloquea: se aprueba el commit actual sin publicarlo y se descarta."""
         if repo not in uatu.CONFIG["repos"]:
             raise ApiError(400, "repo inválido")
         body = self.read_body()
