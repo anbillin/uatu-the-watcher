@@ -201,10 +201,18 @@ def log(msg: str) -> None:
         fh.write(line + "\n")
 
 
-def sh(cmd, cwd=None, check=True, input_text=None) -> str:
-    res = subprocess.run(
-        cmd, cwd=cwd, text=True, capture_output=True, input=input_text
-    )
+GH_TIMEOUT = 120  # s; sin tope, un gh colgado (red caída, Mac dormido) bloquea la web entera
+
+
+def sh(cmd, cwd=None, check=True, input_text=None, timeout=None) -> str:
+    if timeout is None and cmd and cmd[0] == "gh":
+        timeout = GH_TIMEOUT
+    try:
+        res = subprocess.run(
+            cmd, cwd=cwd, text=True, capture_output=True, input=input_text, timeout=timeout
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"sin respuesta en {timeout}s: {' '.join(cmd)[:200]}")
     if check and res.returncode != 0:
         raise RuntimeError(
             f"command failed ({res.returncode}): {' '.join(cmd)}\n{res.stderr.strip()}"
